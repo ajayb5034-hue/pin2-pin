@@ -59,6 +59,7 @@ def _console_print(*values: object, sep: str = " ", end: str = "\n") -> None:
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_PORT = 8000
 DB_PATH = os.path.join(BASE_DIR, "team.db")
 FILES_DIR = os.path.join(BASE_DIR, "files")
 FILE_COMPRESSION_THRESHOLD = 10 * 1024 * 1024
@@ -1297,6 +1298,75 @@ async def call_llm(system_prompt: str, user_prompt: str) -> str:
 # FastAPI App
 # ---------------------------------------------------------------------------
 
+def _local_request_allowlists() -> tuple[set[str], set[str]]:
+    hosts = {f"127.0.0.1:{APP_PORT}", f"localhost:{APP_PORT}"}
+    if APP_PORT == 80:
+        hosts.update(("127.0.0.1", "localhost"))
+    # Keep PIN2PIN_EXTRA_ALLOWED_HOSTS empty outside tests or explicitly trusted local aliases.
+    extra_hosts = {
+        host.strip().lower()
+        for host in os.environ.get("PIN2PIN_EXTRA_ALLOWED_HOSTS", "").split(",")
+        if host.strip() and "/" not in host and "://" not in host
+    }
+    hosts.update(extra_hosts)
+    origins = {f"http://127.0.0.1:{APP_PORT}", f"http://localhost:{APP_PORT}"}
+    origins.update(f"http://{host}" for host in extra_hosts)
+    return hosts, origins
+
+
+class LocalRequestGuard:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+
+        headers = {
+            key.lower(): value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
+        host = headers.get(b"host", "").strip().lower()
+        origin = headers.get(b"origin")
+        allowed_hosts, allowed_origins = _local_request_allowlists()
+        if host not in allowed_hosts:
+            await self._reject(scope, receive, send)
+            return
+
+        if scope["type"] == "http":
+            if scope.get("method", "").upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+                fetch_site = headers.get(b"sec-fetch-site")
+                if origin is not None:
+                    if origin not in allowed_origins:
+                        await self._reject(scope, receive, send)
+                        return
+                elif fetch_site is not None and fetch_site.strip().lower() not in {"same-origin", "none"}:
+                    await self._reject(scope, receive, send)
+                    return
+        elif origin is not None and origin not in allowed_origins:
+            await send({
+                "type": "websocket.close",
+                "code": 1008,
+                "reason": "Host or Origin rejected",
+            })
+            return
+
+        await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _reject(scope, receive, send):
+        if scope["type"] == "websocket":
+            await send({
+                "type": "websocket.close",
+                "code": 1008,
+                "reason": "Host or Origin rejected",
+            })
+            return
+        response = JSONResponse({"detail": "Forbidden"}, status_code=403)
+        await response(scope, receive, send)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -1319,6 +1389,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Pin2Pin", lifespan=lifespan)
+app.add_middleware(LocalRequestGuard)
 
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "..", "frontend", "static")), name="static")
 
@@ -3994,11 +4065,15 @@ def _verify_gmail_credentials(sender_address: str, app_password: str) -> None:
         ) from exc
 
 
+def _is_gmail_address(sender_address: str) -> bool:
+    return bool(re.fullmatch(r"[^@\s]+@gmail\.com", sender_address, re.I))
+
+
 @app.post("/api/resources/gmail/connect")
 def connect_gmail(payload: GmailConnectIn):
     sender_address = payload.sender_address.strip().lower()
     app_password = re.sub(r"\s+", "", payload.app_password)
-    if not re.fullmatch(r"[^@\s]+@gmail\.com", sender_address, re.I):
+    if not _is_gmail_address(sender_address):
         raise HTTPException(status_code=422, detail="Enter a valid Gmail address.")
     if len(app_password) != 16 or not app_password.isalnum():
         raise HTTPException(status_code=422, detail="Enter the 16-character Google app password.")
@@ -9268,4 +9343,4 @@ async def _maybe_weekly_report() -> None:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=APP_PORT)
