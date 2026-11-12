@@ -6,6 +6,11 @@ Do not expose it to a LAN, public internet, reverse proxy, or shared host withou
 adding authentication, authorization, CSRF protections, and an appropriate deployment
 security review.
 
+The local server validates the `Host` header and checks browser `Origin` and
+`Sec-Fetch-Site` headers on state-changing requests; WebSocket handshakes are checked
+before acceptance. These checks reduce DNS-rebinding and cross-site request risks, but
+do not replace real authentication. Pin2Pin remains single-user and local-only.
+
 Provider and resource credentials are stored in the local `backend/.env` file. Runtime
 databases, OAuth material, generated files, conversations, and agent memory are ignored
 by Git. Never commit those files, paste secrets into issues, or use `git add -f` on local
