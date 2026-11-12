@@ -1049,15 +1049,15 @@ class ProjectWorkflowTests(unittest.TestCase):
             "Prepare campaign",
             "Content",
             "done",
-            "Draft saved with token sk-12345678901234567890 password=hunter2 "
+            "Draft saved with token sk-test-placeholder password=not-a-real-password "
             "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi and tags.",
         )
         with open(main.TEAM_MEMORY_PATH, encoding="utf-8") as memory_file:
             memory = memory_file.read()
         self.assertIn("Content | done | Prepare campaign", memory)
         self.assertIn("[redacted]", memory)
-        self.assertNotIn("sk-12345678901234567890", memory)
-        self.assertNotIn("hunter2", memory)
+        self.assertNotIn("sk-test-placeholder", memory)
+        self.assertNotIn("not-a-real-password", memory)
         self.assertNotIn("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi", memory)
 
     def test_secret_config_and_telegram_tokens_migrate_from_sqlite_to_env(self):

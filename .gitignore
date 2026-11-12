@@ -32,3 +32,6 @@ build/
 *.log
 out.log
 err.log
+
+# Keep a separate repository nested here out of this project.
+/pin2pin/

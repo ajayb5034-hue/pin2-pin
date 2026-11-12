@@ -8,7 +8,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).parents[1] / "backend" / "files" / "lets-start-Engineering-rework-20261110.py"
+SCRIPT = Path(__file__).parents[1] / "backend" / "linkedin_csv_export.py"
 SPEC = importlib.util.spec_from_file_location("linkedin_csv_export", SCRIPT)
 exporter = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(exporter)
@@ -60,7 +60,7 @@ class LinkedInCsvExportTests(unittest.TestCase):
         self.assertTrue(public_request.full_url.startswith(exporter.PUBLIC_SEARCH_URL))
         self.assertIn("site%3Alinkedin.com%2Fin", public_request.full_url)
         self.assertIsNone(public_request.data)
-        self.assertEqual(public_request.get_header("User-agent"), "PreemptionAI/1.0")
+        self.assertEqual(public_request.get_header("User-agent"), "Pin2Pin/1.0")
 
     def test_public_html_results_include_a_citation_and_bounded_timeout(self):
         class FakeResponse:

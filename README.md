@@ -44,7 +44,9 @@ is a separate option for project-editing tasks in **Project Workspace**.
 Provider availability, model access, and pricing are controlled by each provider and
 account. An API key may incur charges; Pin2Pin does not promise that any model or API
 is free. Keys are stored locally in the ignored `backend/.env` file and are never
-returned by the configuration API.
+returned by the configuration API. Prompts and related task content sent to a
+configured cloud model provider leave the computer and are handled under that
+provider's terms and privacy policy.
 
 ## Local data and GitHub safety
 
@@ -69,20 +71,29 @@ permissions.
 From the project root:
 
 ```powershell
-.\venv\Scripts\python.exe -m unittest tests.test_project_workflow
+.\venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
 node --check frontend\static\js\app.js
 ```
 
-The backend tests use temporary databases and do not require live model credentials.
-Security
+The tests use temporary databases and mock external services; they do not require
+live model credentials. GitHub Actions runs the complete test suite on Windows
+for supported Python versions on pushes and pull requests.
 
-Pin2Pin is built for a single user on a trusted local computer. The service binds to 127.0.0.1 and has no multi-user login.
+## Security
 
-Do not expose it to a LAN, the public internet, a reverse proxy, or a shared host unless you first add authentication, authorization, and CSRF protection, and have it security reviewed.
+Pin2Pin is built for a single user on a trusted local computer. The service binds to
+`127.0.0.1` and has no multi-user login. Do not expose it to a LAN, public internet,
+reverse proxy, or shared host without first adding authentication, authorization,
+CSRF protection, and an appropriate security review.
 
-Keep API keys and service credentials in backend/.env. The database, credentials, conversations, generated files, and agent memory are local runtime data and are excluded by .gitignore. Never force-add them to a public repository. If a credential is ever published by mistake, revoke it with the provider right away. Deleting the file in a later commit does not remove it from Git history.
+Keep API keys and service credentials in `backend/.env`. The database, credentials,
+conversations, generated files, and agent memory are local runtime data and are
+excluded by `.gitignore`. Never force-add them to a public repository. If a
+credential is accidentally published, revoke it with the provider immediately;
+deleting the file in a later commit does not erase it from Git history.
 
-See SECURITY.md for more.
+See [SECURITY.md](./SECURITY.md) for additional guidance.
+
 ## License
 
 Pin2Pin is licensed under the MIT License. See [LICENSE](./LICENSE).
