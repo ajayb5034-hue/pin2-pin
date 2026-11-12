@@ -25,5 +25,6 @@ diagnostic output publicly.
 External actions must be explicitly approved in the dashboard. Verify the destination
 and content before approving any email or post.
 
-To report a security issue, do not open a public issue containing exploit details or
-credentials. Contact the repository maintainer privately.
+To report a vulnerability, use GitHub's private reporting: open the repository's
+**Security** tab and choose **Report a vulnerability**. Please do not open a public
+issue with exploit details or credentials.
