@@ -106,6 +106,8 @@ class LinkedInCsvExportTests(unittest.TestCase):
             urllib.error.URLError("offline"),
             urllib.error.HTTPError(exporter.PUBLIC_SEARCH_URL, 429, "Too Many Requests", {}, None),
         ):
+            if isinstance(error, urllib.error.HTTPError):
+                self.addCleanup(error.close)
             with self.subTest(error=type(error).__name__):
                 with patch.dict("os.environ", {}, clear=True):
                     with patch.object(exporter.urllib.request, "urlopen", side_effect=error) as request:
