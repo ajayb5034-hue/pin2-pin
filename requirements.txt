@@ -1,8 +1,8 @@
-fastapi
-uvicorn
-sqlalchemy
-pydantic
-python-dotenv
-python-multipart
-httpx
-reportlab
+# Direct dependency pins covered by the Windows CI matrix (Python 3.10–3.13).
+fastapi==0.162.5
+uvicorn==0.54.0
+pydantic==2.14.3
+python-dotenv==1.2.4
+python-multipart==0.0.32
+httpx==0.28.1
+reportlab==5.1.0
