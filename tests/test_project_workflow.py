@@ -2703,6 +2703,79 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertEqual(FakeAsyncClient.submitted_body["height"], 640)
         self.assertEqual(FakeAsyncClient.submitted_body["steps"], 6)
 
+    def test_deapi_key_test_calls_documented_models_endpoint(self):
+        catalog = {
+            "data": [{
+                "slug": "deapi-test-image",
+                "name": "Test image model",
+                "inference_types": ["txt2img"],
+                "info": {"defaults": {}, "limits": {}, "features": {}},
+            }],
+            "meta": {"last_page": 1},
+        }
+
+        class FakeAsyncClient:
+            request = None
+
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_value, traceback):
+                return False
+
+            async def get(self, url, headers, params):
+                FakeAsyncClient.request = (url, headers, params)
+                return main.httpx.Response(
+                    200, json=catalog, request=main.httpx.Request("GET", url)
+                )
+
+        with mock.patch.object(main.httpx, "AsyncClient", FakeAsyncClient):
+            response = self.client.post("/api/media/deapi/test-and-list", json={
+                "api_key": "test-key-not-a-real-secret",
+            })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"], response.json())
+        self.assertEqual(
+            FakeAsyncClient.request[0],
+            "https://api.deapi.ai/api/v2/models",
+        )
+        self.assertEqual(FakeAsyncClient.request[2]["limit"], 50)
+        self.assertEqual(FakeAsyncClient.request[1]["Authorization"], "Bearer test-key-not-a-real-secret")
+
+    def test_media_provider_and_model_can_be_changed_independently(self):
+        gemini_model = "gemini-2.0-flash-preview-image-generation"
+        main.set_config("gemini_api_key", "test-gemini-key")
+        main.set_config("gemini_available_models", json.dumps([gemini_model]))
+        initial = self.client.get("/api/media/config").json()
+        self.assertEqual(initial["image_provider"], "gemini")
+        selected = self.client.post("/api/media/select-model", json={
+            "media_type": "image",
+            "provider": "gemini",
+            "model": gemini_model,
+        })
+        self.assertEqual(selected.status_code, 200, selected.text)
+        self.assertEqual(selected.json()["image_provider"], "gemini")
+        self.assertEqual(selected.json()["image_model"], gemini_model)
+
+        expected_asset = (b"png", "png", "image/png")
+        with (
+            mock.patch.object(
+                main, "_generate_gemini_media", new=mock.AsyncMock(return_value=expected_asset)
+            ) as gemini,
+            mock.patch.object(
+                main, "_generate_deapi_media", new=mock.AsyncMock()
+            ) as deapi,
+        ):
+            result = asyncio.run(main._generate_requested_media("image", "A product image"))
+
+        self.assertEqual(result, expected_asset)
+        gemini.assert_awaited_once_with("image", "A product image", None, gemini_model)
+        deapi.assert_not_awaited()
+
     def test_blocked_task_keeps_last_progress_and_downloadable_output(self):
         output = "name,linkedin_profile_link\nAda Lovelace,https://www.linkedin.com/in/ada-lovelace/\n"
         summary = "Found 208 of 500 LinkedIn profiles; 292 still needed. CSV saved for review."

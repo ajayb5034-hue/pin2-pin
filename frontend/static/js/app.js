@@ -74,7 +74,15 @@ const state = {
     has_key: false,
     selected_model: "",
   },
-  mediaConfig: { provider: "deAPI", has_key: false, image_models: [], video_models: [], image_model: "", video_model: "" },
+  mediaConfig: {
+    providers: [],
+    image_provider: "gemini",
+    video_provider: "gemini",
+    image_models: [],
+    video_models: [],
+    image_model: "gemini-nano-banana-2.1",
+    video_model: "gemini-omni-1.2-flash",
+  },
   availableModels: {},
   lastTest: {},
   health: null,
@@ -3224,12 +3232,20 @@ function renderModels() {
   const r = state.modelRouter || {};
   const models = r.models || [];
   const media = state.mediaConfig || {};
+  const mediaProviders = media.providers || [];
+  const imageProvider = media.image_provider || "gemini";
+  const videoProvider = media.video_provider || "gemini";
+  const providerOptions = (selected) => mediaProviders.map((provider) =>
+    `<option value="${esc(provider.id)}" ${selected === provider.id ? "selected" : ""} ${provider.has_key ? "" : "disabled"}>${esc(provider.label)}${provider.has_key ? "" : " — connect first"}</option>`
+  ).join("");
   const imageOptions = (media.image_models || []).map((model) =>
-    `<option value="${esc(model.slug)}" ${media.image_model === model.slug ? "selected" : ""}>${esc(model.name)}</option>`
+    `<option value="${esc(model.slug)}">${esc(model.name)}</option>`
   ).join("");
   const videoOptions = (media.video_models || []).map((model) =>
-    `<option value="${esc(model.slug)}" ${media.video_model === model.slug ? "selected" : ""}>${esc(model.name)}</option>`
+    `<option value="${esc(model.slug)}">${esc(model.name)}</option>`
   ).join("");
+  const imageProviderReady = mediaProviders.some((provider) => provider.id === imageProvider && provider.has_key);
+  const videoProviderReady = mediaProviders.some((provider) => provider.id === videoProvider && provider.has_key);
   const active = r.selected_model || r.active_model || (models.length ? models[0] : "—");
 
   document.getElementById("content").innerHTML = `
@@ -3269,17 +3285,14 @@ function renderModels() {
       </div>
       <section class="media-models-card card">
           <div class="section-title">Image & video generation models</div>
-          <p>Connect deAPI to choose an account-enabled image model and video model. A selected deAPI model is used for that media type; otherwise image/video work uses the configured Gemini media path. Generation can consume provider credits.</p>
-          ${!media.has_key ? `<div class="router-notice">Connect deAPI in <button class="inline-link" data-goto="config">Configuration</button> to load available media models.</div>` : ""}
+          <p>Choose a provider and model separately for images and video. Google Gemini is the default; deAPI models appear after their key is tested. Only media-capable providers are listed here—ordinary text models cannot generate image or video files. Generation may consume provider credits.</p>
           <div class="media-model-selects">
-            <label>Image model<select id="deapiImageModel" ${media.has_key && imageOptions ? "" : "disabled"}>
-              <option value="">${media.has_key ? "Use configured fallback" : "Connect deAPI first"}</option>${imageOptions}
-            </select></label>
-            <label>Video model<select id="deapiVideoModel" ${media.has_key && videoOptions ? "" : "disabled"}>
-              <option value="">${media.has_key ? "Use configured fallback" : "Connect deAPI first"}</option>${videoOptions}
-            </select></label>
+            <label>Image provider<select id="mediaImageProvider">${providerOptions(imageProvider)}</select></label>
+            <label>Image model<input id="mediaImageModel" list="mediaImageModelOptions" value="${esc(media.image_model || "")}" ${imageProviderReady ? "" : "disabled"}><datalist id="mediaImageModelOptions">${imageOptions}</datalist></label>
+            <label>Video provider<select id="mediaVideoProvider">${providerOptions(videoProvider)}</select></label>
+            <label>Video model<input id="mediaVideoModel" list="mediaVideoModelOptions" value="${esc(media.video_model || "")}" ${videoProviderReady ? "" : "disabled"}><datalist id="mediaVideoModelOptions">${videoOptions}</datalist></label>
           </div>
-          <small>${(media.image_models || []).length} image model(s) · ${(media.video_models || []).length} video model(s) · Generated files are saved in Files.</small>
+          <small>Gemini offers the existing default model IDs and compatible discovered model suggestions. deAPI lists only models enabled for this account and media type. Generated files are saved in Files.</small>
       </section>
     </div>
   `;
@@ -3287,8 +3300,12 @@ function renderModels() {
   const btn = document.getElementById("btnSwitchModel");
   if (btn) btn.addEventListener("click", switchModel);
   ["image", "video"].forEach((kind) => {
-    const select = document.getElementById(kind === "image" ? "deapiImageModel" : "deapiVideoModel");
-    if (select) select.addEventListener("change", () => selectDeapiMediaModel(kind, select.value));
+    const providerSelect = document.getElementById(`media${kind[0].toUpperCase()}${kind.slice(1)}Provider`);
+    const modelInput = document.getElementById(`media${kind[0].toUpperCase()}${kind.slice(1)}Model`);
+    if (providerSelect) providerSelect.addEventListener("change", () => selectMediaModel(kind, providerSelect.value, ""));
+    if (modelInput) modelInput.addEventListener("change", () => {
+      selectMediaModel(kind, providerSelect ? providerSelect.value : "gemini", modelInput.value);
+    });
   });
 }
 
@@ -3652,11 +3669,14 @@ async function testDeapiMediaProvider() {
     renderActiveTab(false);
     notify("deAPI connected — media models loaded", "success");
   } catch (error) {
+    const message = /(^|\b)(not found|request failed \(404\))/i.test(error.message)
+      ? "The running Pin2Pin backend returned 404 before it could test or save this key. Close Pin2Pin completely and relaunch the updated copy."
+      : error.message;
     if (result) {
-      result.textContent = error.message;
+      result.textContent = message;
       result.className = "test-result test-error";
     }
-    notify("Could not test deAPI key: " + error.message, "error");
+    notify("Could not test deAPI key: " + message, "error");
   }
 }
 
@@ -3668,6 +3688,8 @@ async function clearDeapiMediaProvider() {
       fetchJson("/api/config", { method: "POST", body: { key: "deapi_models", value: "[]" } }),
       fetchJson("/api/config", { method: "POST", body: { key: "deapi_image_model", value: "" } }),
       fetchJson("/api/config", { method: "POST", body: { key: "deapi_video_model", value: "" } }),
+      fetchJson("/api/config", { method: "POST", body: { key: "media_image_provider", value: "gemini" } }),
+      fetchJson("/api/config", { method: "POST", body: { key: "media_video_provider", value: "gemini" } }),
     ]);
     await loadAll();
     renderActiveTab(false);
@@ -3677,12 +3699,13 @@ async function clearDeapiMediaProvider() {
   }
 }
 
-async function selectDeapiMediaModel(mediaType, model) {
+async function selectMediaModel(mediaType, provider, model) {
   try {
     state.mediaConfig = await fetchJson("/api/media/select-model", {
       method: "POST",
-      body: { media_type: mediaType, model },
+      body: { media_type: mediaType, provider, model },
     });
+    renderActiveTab(false);
     notify(`${mediaType === "image" ? "Image" : "Video"} model updated`, "success");
   } catch (error) {
     notify("Could not select media model: " + error.message, "error");

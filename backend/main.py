@@ -846,6 +846,10 @@ def init_db() -> None:
         "deapi_models": "[]",
         "deapi_image_model": "",
         "deapi_video_model": "",
+        "media_image_provider": "",
+        "media_video_provider": "",
+        "media_image_model": "gemini-nano-banana-2.1",
+        "media_video_model": "gemini-omni-1.2-flash",
         "auto_failover": "1",
         "openrouter_model_index": "0",
         "groq_model_index": "0",
@@ -1444,7 +1448,8 @@ class SelectModelIn(BaseModel):
 
 class MediaModelIn(BaseModel):
     media_type: str
-    model: str
+    provider: str = "deapi"
+    model: str = ""
 
 
 @app.get("/api/project/settings")
@@ -5859,7 +5864,10 @@ def _explicit_video_duration_seconds(task: dict) -> Optional[int]:
 
 
 async def _generate_gemini_media(
-    media_type: str, prompt: str, video_duration_seconds: Optional[int] = None
+    media_type: str,
+    prompt: str,
+    video_duration_seconds: Optional[int] = None,
+    model: Optional[str] = None,
 ) -> tuple[bytes, str, str]:
     api_key = get_config("gemini_api_key", "")
     if not api_key:
@@ -5876,13 +5884,17 @@ async def _generate_gemini_media(
     if media_type == "image":
         headers["Api-Revision"] = "2026-05-20"
         body = {
-            "model": "gemini-nano-banana-2.1",
+            "model": model or get_config(
+                "media_image_model", GEMINI_MEDIA_DEFAULTS["image"]
+            ),
             "input": [{"type": "text", "text": prompt[:12000]}],
         }
     else:
         duration_seconds = video_duration_seconds or _requested_video_duration_seconds({"title": prompt})
         body = {
-            "model": "gemini-omni-1.2-flash",
+            "model": model or get_config(
+                "media_video_model", GEMINI_MEDIA_DEFAULTS["video"]
+            ),
             "input": prompt[:12000],
             "response_format": {
                 "type": "video",
@@ -5944,6 +5956,51 @@ async def _generate_gemini_media(
 
 
 DEAPI_BASE_URL = "https://api.deapi.ai"
+GEMINI_MEDIA_DEFAULTS = {
+    "image": "gemini-nano-banana-2.1",
+    "video": "gemini-omni-1.2-flash",
+}
+
+
+def _selected_media_provider(media_type: str) -> str:
+    provider = get_config(f"media_{media_type}_provider", "").strip().lower()
+    if provider in ("gemini", "deapi"):
+        return provider
+    if get_config(f"deapi_{media_type}_model", ""):
+        return "deapi"
+    return "gemini"
+
+
+def _gemini_media_models(media_type: str) -> list[dict]:
+    try:
+        models = json.loads(get_config("gemini_available_models", "[]"))
+    except (TypeError, ValueError):
+        models = []
+    if not isinstance(models, list):
+        models = []
+    keywords = ("image", "imagen", "banana") if media_type == "image" else ("video", "veo", "omni")
+    slugs = {
+        str(model).strip()
+        for model in models
+        if isinstance(model, str) and any(word in model.lower() for word in keywords)
+    }
+    configured = get_config(
+        f"media_{media_type}_model", GEMINI_MEDIA_DEFAULTS[media_type]
+    ).strip()
+    if configured:
+        slugs.add(configured)
+    return [{"slug": slug, "name": slug} for slug in sorted(slugs)]
+
+
+def _media_models(media_type: str, provider: str) -> list[dict]:
+    if provider == "deapi":
+        inference_type = "txt2img" if media_type == "image" else "txt2video"
+        return [
+            {"slug": model["slug"], "name": model.get("name") or model["slug"]}
+            for model in _deapi_catalog()
+            if inference_type in model.get("inference_types", [])
+        ]
+    return _gemini_media_models(media_type)
 
 
 def _deapi_catalog() -> list[dict]:
@@ -5955,20 +6012,37 @@ def _deapi_catalog() -> list[dict]:
 
 
 def _deapi_media_config() -> dict:
-    catalog = _deapi_catalog()
+    providers = [
+        {
+            "id": "gemini",
+            "label": "Google Gemini",
+            "has_key": bool(get_config("gemini_api_key", "")),
+        },
+        {
+            "id": "deapi",
+            "label": "deAPI.ai",
+            "has_key": bool(get_config("deapi_api_key", "")),
+        },
+    ]
+    image_provider = _selected_media_provider("image")
+    video_provider = _selected_media_provider("video")
     return {
-        "provider": "deAPI",
+        "providers": providers,
         "has_key": bool(get_config("deapi_api_key", "")),
-        "image_models": [
-            {"slug": model["slug"], "name": model.get("name") or model["slug"]}
-            for model in catalog if "txt2img" in model.get("inference_types", [])
-        ],
-        "video_models": [
-            {"slug": model["slug"], "name": model.get("name") or model["slug"]}
-            for model in catalog if "txt2video" in model.get("inference_types", [])
-        ],
-        "image_model": get_config("deapi_image_model", ""),
-        "video_model": get_config("deapi_video_model", ""),
+        "image_provider": image_provider,
+        "video_provider": video_provider,
+        "image_models": _media_models("image", image_provider),
+        "video_models": _media_models("video", video_provider),
+        "image_model": (
+            get_config("deapi_image_model", "")
+            if image_provider == "deapi"
+            else get_config("media_image_model", GEMINI_MEDIA_DEFAULTS["image"])
+        ),
+        "video_model": (
+            get_config("deapi_video_model", "")
+            if video_provider == "deapi"
+            else get_config("media_video_model", GEMINI_MEDIA_DEFAULTS["video"])
+        ),
     }
 
 
@@ -5986,6 +6060,8 @@ def _deapi_response_error(response: httpx.Response, operation: str) -> MediaGene
         detail = "deAPI rate limit reached. Wait for the provider's reset window before retrying."
     elif response.status_code == 422 and not detail:
         detail = "The selected deAPI model rejected its parameters. Refresh its model settings and try again."
+    elif response.status_code == 404 and operation == "model discovery":
+        detail = "The model-list endpoint was not found. Confirm the deAPI API URL and retry."
     return MediaGenerationError(
         f"deAPI {operation} failed with HTTP {response.status_code}"
         + (f": {detail[:300]}" if detail else ".")
@@ -6077,18 +6153,39 @@ def select_deapi_media_model(payload: MediaModelIn):
     media_type = payload.media_type.strip().lower()
     if media_type not in ("image", "video"):
         raise HTTPException(status_code=400, detail="Choose image or video media.")
-    if not get_config("deapi_api_key", ""):
-        raise HTTPException(status_code=409, detail="Connect and test a deAPI key before selecting media models.")
-    inference_type = "txt2img" if media_type == "image" else "txt2video"
-    if not payload.model:
-        set_config(f"deapi_{media_type}_model", "")
-        return _deapi_media_config()
-    if not any(
-        model["slug"] == payload.model and inference_type in model.get("inference_types", [])
-        for model in _deapi_catalog()
-    ):
-        raise HTTPException(status_code=400, detail="That model is not available for the selected media type.")
-    set_config(f"deapi_{media_type}_model", payload.model)
+    provider = payload.provider.strip().lower()
+    model = payload.model.strip()
+    if provider == "deapi":
+        if not get_config("deapi_api_key", ""):
+            raise HTTPException(status_code=409, detail="Connect and test a deAPI key before selecting deAPI models.")
+        available = _media_models(media_type, provider)
+        if not model:
+            current = get_config(f"deapi_{media_type}_model", "")
+            model = current if any(item["slug"] == current for item in available) else (
+                available[0]["slug"] if available else ""
+            )
+        if not any(item["slug"] == model for item in available):
+            raise HTTPException(
+                status_code=400,
+                detail=f"No account-enabled deAPI {media_type} model is selected. Test the key and refresh the model list.",
+            )
+        set_config(f"deapi_{media_type}_model", model)
+    elif provider == "gemini":
+        if not get_config("gemini_api_key", ""):
+            raise HTTPException(
+                status_code=409,
+                detail="Connect a Google Gemini API key under Configuration before selecting Gemini media models.",
+            )
+        if not model:
+            model = get_config(
+                f"media_{media_type}_model", GEMINI_MEDIA_DEFAULTS[media_type]
+            ).strip() or GEMINI_MEDIA_DEFAULTS[media_type]
+        if len(model) > 160 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]*", model):
+            raise HTTPException(status_code=400, detail="Enter a valid Gemini model ID.")
+        set_config(f"media_{media_type}_model", model)
+    else:
+        raise HTTPException(status_code=400, detail="Choose Google Gemini or deAPI.ai.")
+    set_config(f"media_{media_type}_provider", provider)
     return _deapi_media_config()
 
 
@@ -6286,12 +6383,16 @@ async def _generate_deapi_media(
 async def _generate_requested_media(
     media_type: str, prompt: str, duration_seconds: Optional[int] = None
 ) -> tuple[bytes, str, str]:
-    if get_config("deapi_api_key", ""):
+    provider = _selected_media_provider(media_type)
+    if provider == "deapi":
         return await _generate_deapi_media(media_type, prompt, duration_seconds)
     if media_type == "video" and duration_seconds is None:
         duration_seconds = _requested_video_duration_seconds({"title": prompt})
     return await _generate_gemini_media(
-        media_type, prompt, duration_seconds
+        media_type,
+        prompt,
+        duration_seconds,
+        get_config(f"media_{media_type}_model", GEMINI_MEDIA_DEFAULTS[media_type]),
     )
 
 

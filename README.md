@@ -41,12 +41,14 @@ API, xAI/Grok, Groq, Google Gemini, Mistral, Hugging Face, DeepInfra, NVIDIA NIM
 Together AI. OpenRouter model discovery can include Hermes models. The local Codex CLI
 is a separate option for project-editing tasks in **Project Workspace**.
 
-The **Models** page also supports deAPI.ai image and video models. Add and test a deAPI
-key under Configuration to discover models enabled for your account, then select an
-image model and a video model separately. Explicit media requests get a specific prompt
-prepared before generation, and returned assets are saved locally in **Files**. Media
-generation may consume provider credits. A media failure is recorded separately from
-the requested text deliverable so a failed video call does not erase a report or script.
+The **Models** page lets you choose Google Gemini or deAPI.ai independently for image
+and video generation. Gemini remains the default and uses the existing model IDs; its
+compatible discovered model IDs are offered as suggestions. Add and test a deAPI key
+under Configuration to discover account-enabled media models. Text-only models are
+not treated as media generators. Explicit media requests get a specific prompt prepared
+before generation, and returned assets are saved locally in **Files**. Media generation
+may consume provider credits. A media failure is recorded separately from the requested
+text deliverable so a failed video call does not erase a report or script.
 
 Blocked, rejected, and completed task cards include a task-only conversation. Ask about
 the result there, reply to individual messages, or say “resume from last” to continue the
