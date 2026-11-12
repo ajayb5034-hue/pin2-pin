@@ -74,7 +74,15 @@ node --check frontend\static\js\app.js
 ```
 
 The backend tests use temporary databases and do not require live model credentials.
+Security
 
+Pin2Pin is built for a single user on a trusted local computer. The service binds to 127.0.0.1 and has no multi-user login.
+
+Do not expose it to a LAN, the public internet, a reverse proxy, or a shared host unless you first add authentication, authorization, and CSRF protection, and have it security reviewed.
+
+Keep API keys and service credentials in backend/.env. The database, credentials, conversations, generated files, and agent memory are local runtime data and are excluded by .gitignore. Never force-add them to a public repository. If a credential is ever published by mistake, revoke it with the provider right away. Deleting the file in a later commit does not remove it from Git history.
+
+See SECURITY.md for more.
 ## License
 
 Pin2Pin is licensed under the MIT License. See [LICENSE](./LICENSE).
