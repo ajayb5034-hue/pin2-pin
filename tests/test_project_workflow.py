@@ -3174,7 +3174,12 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertEqual(backlog, 1)
 
     def test_agent_schedule_enqueues_once_and_keeps_agent_assignment(self):
-        agent = self.client.get("/api/agents").json()[1]
+        workers = [
+            item for item in self.client.get("/api/agents").json()
+            if item["role"] != "Chief Executive Officer"
+        ]
+        self.assertTrue(workers)
+        agent = workers[0]
         local_time = datetime.now().astimezone().strftime("%H:%M")
         response = self.client.post(
             f"/api/agents/{agent['id']}/schedules",
