@@ -1323,6 +1323,29 @@ class LocalRequestGuard:
             await self.app(scope, receive, send)
             return
 
+        if scope["type"] == "http":
+            response_send = send
+
+            async def send_with_security_headers(message):
+                if message.get("type") == "http.response.start":
+                    response_headers = list(message.get("headers", []))
+                    present = {name.lower() for name, _ in response_headers}
+                    security_headers = (
+                        (b"x-frame-options", b"DENY"),
+                        (b"content-security-policy", b"frame-ancestors 'none'"),
+                        (b"x-content-type-options", b"nosniff"),
+                        (b"referrer-policy", b"no-referrer"),
+                    )
+                    response_headers.extend(
+                        (name, value)
+                        for name, value in security_headers
+                        if name not in present
+                    )
+                    message = {**message, "headers": response_headers}
+                await response_send(message)
+
+            send = send_with_security_headers
+
         headers = {
             key.lower(): value.decode("latin-1")
             for key, value in scope.get("headers", [])
