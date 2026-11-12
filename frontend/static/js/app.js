@@ -293,6 +293,17 @@ function esc(s) {
   return div.innerHTML;
 }
 
+function safeExternalUrl(value) {
+  const url = String(value ?? "").trim();
+  if (!/^https?:\/\//i.test(url)) return "";
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : "";
+  } catch {
+    return "";
+  }
+}
+
 function formatBytes(n) {
   const size = Number(n) || 0;
   if (size < 1024) return `${size} B`;
@@ -860,7 +871,10 @@ function renderSuggestions() {
           <div class="suggestion-card-top"><span class="suggestion-agent">${agentIcon(agent ? agent.role : "")} ${esc(item.agent_name)}</span><span class="suggestion-state state-${esc(item.status)}">${esc(item.status.replace("_", " "))}</span></div>
           <h3>${esc(item.title)}</h3>
           <p>${esc(item.summary)}</p>
-          ${sources.length ? `<details class="suggestion-sources"><summary>Research sources (${sources.length})</summary><ul>${sources.map((url) => `<li><a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a></li>`).join("")}</ul></details>` : ""}
+          ${sources.length ? `<details class="suggestion-sources"><summary>Research sources (${sources.length})</summary><ul>${sources.map((url) => {
+            const safeUrl = safeExternalUrl(url);
+            return `<li>${safeUrl ? `<a href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>` : esc(url)}</li>`;
+          }).join("")}</ul></details>` : ""}
           ${item.status === "open" ? `<div class="suggestion-actions"><button class="btn btn-primary btn-sm" data-suggestion-task="${esc(item.id)}">Add as task</button><button class="btn btn-outline btn-sm" data-suggestion-dismiss="${esc(item.id)}">Dismiss</button></div>` : ""}
         </article>`;
       }).join("") || `<div class="surface-panel empty-state">No suggestions have been generated yet. The agents will each research once after all queued, active, and review tasks have cleared.</div>`}
