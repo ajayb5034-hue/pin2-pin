@@ -20,6 +20,10 @@ connected services and external actions.
   publishing a connected Telegram post.
 - Uses real configured model providers; it does not simulate model results.
 
+## Dashboard preview
+
+![Pin2Pin dashboard preview](docs/screenshot.png)
+
 ## Run on Windows
 
 Requires Python 3.10+ and internet access to install dependencies and use cloud models.
@@ -90,13 +94,18 @@ permissions.
 From the project root:
 
 ```powershell
-.\venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
-node --check frontend\static\js\app.js
+python -m unittest discover -s tests -p "test_*.py"
+node --check frontend/static/js/app.js
 ```
 
 The tests use temporary databases and mock external services; they do not require
 live model credentials. GitHub Actions runs the complete test suite on Windows
 for supported Python versions on pushes and pull requests.
+
+## Known limitations
+
+The setup scripts currently target Windows only. Pin2Pin is single-user and has no
+login. Cloud AI providers receive the task prompts and related content sent to them.
 
 ## Security
 
@@ -104,6 +113,9 @@ Pin2Pin is built for a single user on a trusted local computer. The service bind
 `127.0.0.1` and has no multi-user login. Do not expose it to a LAN, public internet,
 reverse proxy, or shared host without first adding authentication, authorization,
 CSRF protection, and an appropriate security review.
+
+Host and Origin checks reduce browser-based risk but do not replace authentication; see
+[SECURITY.md](./SECURITY.md).
 
 Keep API keys and service credentials in `backend/.env`. The database, credentials,
 conversations, generated files, and agent memory are local runtime data and are
