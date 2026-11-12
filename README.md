@@ -41,6 +41,23 @@ API, xAI/Grok, Groq, Google Gemini, Mistral, Hugging Face, DeepInfra, NVIDIA NIM
 Together AI. OpenRouter model discovery can include Hermes models. The local Codex CLI
 is a separate option for project-editing tasks in **Project Workspace**.
 
+The **Models** page also supports deAPI.ai image and video models. Add and test a deAPI
+key under Configuration to discover models enabled for your account, then select an
+image model and a video model separately. Explicit media requests get a specific prompt
+prepared before generation, and returned assets are saved locally in **Files**. Media
+generation may consume provider credits. A media failure is recorded separately from
+the requested text deliverable so a failed video call does not erase a report or script.
+
+Blocked, rejected, and completed task cards include a task-only conversation. Ask about
+the result there, reply to individual messages, or say “resume from last” to continue the
+same task with the prior output retained in task history. The Task Board shows all active
+work and the latest seven completed, rejected, and blocked tasks in each status.
+
+Project Workspace streams Engineering run logs and includes a private chat with
+Engineering. Select **Ask Engineering** beside a log line to discuss it; direct code
+changes requested in that chat are queued as normal project tasks and verified by the
+background Engineering worker.
+
 Provider availability, model access, and pricing are controlled by each provider and
 account. An API key may incur charges; Pin2Pin does not promise that any model or API
 is free. Keys are stored locally in the ignored `backend/.env` file and are never

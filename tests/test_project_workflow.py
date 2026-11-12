@@ -589,6 +589,51 @@ class ProjectWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(updated["appreciation_stars"], 1)
 
+    def test_reply_targets_are_saved_and_task_messages_are_not_in_team_chat(self):
+        first = self.client.post("/api/messages", json={
+            "sender": "user", "receiver": "CEO", "content": "Can you check this?"
+        })
+        self.assertEqual(first.status_code, 200)
+        first_id = self.client.get("/api/messages").json()[-1]["id"]
+        reply = self.client.post("/api/messages", json={
+            "sender": "user", "receiver": "CEO", "content": "Replying with more detail.",
+            "reply_to_id": first_id,
+        })
+        self.assertEqual(reply.status_code, 200, reply.text)
+        messages = self.client.get("/api/messages").json()
+        self.assertEqual(messages[-1]["reply_to_id"], first_id)
+        invalid = self.client.post("/api/messages", json={
+            "sender": "user", "receiver": "CEO", "content": "Wrong thread.",
+            "reply_to_id": "missing-message",
+        })
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_task_board_limits_only_terminal_statuses(self):
+        conn = main.get_conn()
+        try:
+            now = datetime.now(timezone.utc)
+            for status in ("done", "blocked", "rejected"):
+                for index in range(9):
+                    stamp = (now + timedelta(seconds=index)).isoformat()
+                    conn.execute(
+                        "INSERT INTO tasks (id,title,description,status,priority,created_at,updated_at) "
+                        "VALUES (?,?,?,?,?,?,?)",
+                        (f"{status}_{index}", f"{status} task {index}", "", status, "low", stamp, stamp),
+                    )
+            conn.execute(
+                "INSERT INTO tasks (id,title,description,status,priority,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                ("active_kept", "Active task", "", "in_progress", "medium", now.isoformat(), now.isoformat()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        tasks = self.client.get("/api/tasks").json()
+        for status in ("done", "blocked", "rejected"):
+            self.assertEqual(sum(task["status"] == status for task in tasks), 7)
+        self.assertIn("active_kept", {task["id"] for task in tasks})
+        self.assertEqual(len(self.client.get("/api/tasks?include_archived=true").json()), 28)
+
     def test_accepted_engineering_collaboration_awards_one_peer_star_once(self):
         conn = main.get_conn()
         try:
@@ -808,6 +853,36 @@ class ProjectWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(invalid.status_code, 400)
 
+    def test_project_workspace_chat_can_queue_engineering_from_a_log_line(self):
+        workspace = self._workspace()
+        main.set_config("project_workspace", workspace)
+        main._append_engineering_log("task_log_context", "stderr", "pytest failed: test parser")
+        with mock.patch.object(main.shutil, "which", return_value="C:\\tools\\codex.exe"):
+            response = self.client.post("/api/project/chat", json={
+                "content": "Please fix the parser issue shown in the latest log line."
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("queued project task", response.json()["reply"])
+        project_chat = self.client.get("/api/project/chat").json()
+        self.assertEqual([message["sender"] for message in project_chat], ["user", "Engineering"])
+        self.assertFalse(any(message["scope"] == "project" for message in self.client.get("/api/messages").json()))
+        conn = main.get_conn()
+        try:
+            task = conn.execute(
+                "SELECT execution_mode,assigned_agent_id,description FROM tasks "
+                "WHERE title LIKE 'Engineering follow-up:%' ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            engineering = conn.execute(
+                "SELECT id FROM agents WHERE name='Engineering'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(task["execution_mode"], "project")
+        self.assertEqual(task["assigned_agent_id"], engineering["id"])
+        self.assertIn("pytest failed: test parser", task["description"])
+        logs = self.client.get("/api/project/logs").json()
+        self.assertEqual(logs[0]["content"], "pytest failed: test parser")
+
     def test_task_export_chooses_structured_format(self):
         conn = main.get_conn()
         try:
@@ -836,6 +911,13 @@ class ProjectWorkflowTests(unittest.TestCase):
                  "Prepare the report in a PDF file.", "blocked", "high",
                  "First-party customer records are required.", now, now),
             )
+            conn.execute(
+                "INSERT INTO tasks (id,title,description,status,priority,output,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                ("task_docx_export", "Market research Word document",
+                 "Export the report as a Word document.",
+                 "done", "medium", "# Summary\n\n| Name | Segment |\n|---|---|\n| Ada | Trading |\n", now, now),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -844,6 +926,7 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertEqual(tasks["task_csv_export"]["export_extension"], "csv")
         self.assertEqual(tasks["task_text_export"]["export_extension"], "txt")
         self.assertEqual(tasks["task_script_text_export"]["export_extension"], "txt")
+        self.assertEqual(tasks["task_docx_export"]["export_extension"], "docx")
         exported = self.client.get("/api/tasks/task_csv_export/export")
         self.assertEqual(exported.status_code, 200)
         self.assertEqual(exported.headers["content-type"], "text/csv; charset=utf-8")
@@ -854,6 +937,16 @@ class ProjectWorkflowTests(unittest.TestCase):
         pdf_export = self.client.get("/api/tasks/task_pdf_export/export")
         self.assertEqual(pdf_export.headers["content-type"], "application/pdf")
         self.assertTrue(pdf_export.content.startswith(b"%PDF-"))
+        word_export = self.client.get("/api/tasks/task_docx_export/export")
+        self.assertEqual(word_export.status_code, 200)
+        self.assertEqual(
+            word_export.headers["content-type"],
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        with main.zipfile.ZipFile(main.io.BytesIO(word_export.content)) as document:
+            xml = document.read("word/document.xml").decode("utf-8")
+        self.assertIn("Ada", xml)
+        self.assertIn("<w:tbl>", xml)
 
     def test_pdf_task_output_is_saved_as_pdf_file(self):
         saved = main._save_agent_output_file(
@@ -2420,6 +2513,56 @@ class ProjectWorkflowTests(unittest.TestCase):
             ),
             [],
         )
+        self.assertEqual(
+            main._requested_media_types({
+                "title": "Prepare a Word report",
+                "description": "Include a data summary.",
+                "context": "Earlier conversation: create a video and generate an image.",
+            }),
+            [],
+        )
+
+    def test_media_provider_failure_keeps_the_requested_text_deliverable(self):
+        agent = next(
+            item for item in self.client.get("/api/agents").json()
+            if item["role"] == "Content Creation"
+        )
+        now = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+        conn = main.get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO tasks (id,title,description,assigned_agent_id,status,priority,execution_mode,"
+                "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                ("task_text_with_media", "Create a promotional video and a Word report",
+                 "Write the report and generate an actual promotional video file.",
+                 agent["id"], "in_progress", "medium", "deliverable", now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        with (
+            mock.patch.object(main, "_has_any_provider_key", return_value=True),
+            mock.patch.object(
+                main, "call_llm",
+                new=mock.AsyncMock(side_effect=["The requested Word report content.", "A detailed video prompt."]),
+            ),
+            mock.patch.object(
+                main, "_generate_requested_media",
+                new=mock.AsyncMock(side_effect=main.MediaGenerationError("account quota reached")),
+            ),
+        ):
+            asyncio.run(main._process_workers())
+        conn = main.get_conn()
+        try:
+            task = conn.execute(
+                "SELECT status,output,result FROM tasks WHERE id='task_text_with_media'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(task["status"], "blocked")
+        self.assertIn("The requested Word report content.", task["output"])
+        self.assertIn("MEDIA GENERATION INCOMPLETE (text deliverable retained)", task["output"])
+        self.assertNotEqual(task["output"].strip(), "account quota reached")
 
     def test_video_generation_uses_gemini_video_api_and_returns_mp4(self):
         task = {"title": "Create a promotional video reel"}
@@ -2476,6 +2619,89 @@ class ProjectWorkflowTests(unittest.TestCase):
                 os.environ.pop(env_key, None)
             else:
                 os.environ[env_key] = original_key
+
+    def test_deapi_model_selection_submits_and_downloads_real_image(self):
+        model = {
+            "slug": "deapi-test-image",
+            "name": "Test image model",
+            "inference_types": ["txt2img"],
+            "info": {
+                "defaults": {"width": 512, "height": 640, "steps": 6},
+                "limits": {
+                    "min_width": 256, "max_width": 1024, "min_height": 256,
+                    "max_height": 1024, "dimension_multiple": 64,
+                },
+                "features": {"supports_steps": True},
+            },
+        }
+        main.set_config("deapi_api_key", "test-deapi-key")
+        main.set_config("deapi_models", json.dumps([model]))
+        selection = self.client.post("/api/media/select-model", json={
+            "media_type": "image", "model": model["slug"],
+        })
+        self.assertEqual(selection.status_code, 200, selection.text)
+        image_bytes = b"\x89PNG\r\n\x1a\ntest-image"
+
+        class FakeResponse:
+            def __init__(self, status_code, payload=None):
+                self.status_code = status_code
+                self._payload = payload or {}
+
+            def json(self):
+                return self._payload
+
+        class FakeStream:
+            status_code = 200
+            headers = {"content-type": "image/png", "content-length": str(len(image_bytes))}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_value, traceback):
+                return False
+
+            async def aiter_bytes(self):
+                yield image_bytes
+
+        class FakeAsyncClient:
+            submitted_body = None
+
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_value, traceback):
+                return False
+
+            async def post(self, url, headers, json):
+                FakeAsyncClient.submitted_body = json
+                return FakeResponse(200, {"data": {"request_id": "job-test"}})
+
+            async def get(self, url, headers):
+                return FakeResponse(200, {
+                    "data": {"status": "done", "result_url": "https://media.example/image.png"}
+                })
+
+            def stream(self, method, url):
+                return FakeStream()
+
+        with (
+            mock.patch.object(main.httpx, "AsyncClient", FakeAsyncClient),
+            mock.patch.object(main, "_assert_public_result_url"),
+            mock.patch.object(main.asyncio, "sleep", new=mock.AsyncMock()),
+        ):
+            content, extension, mime_type = asyncio.run(
+                main._generate_deapi_media("image", "Detailed test prompt")
+            )
+        self.assertEqual(content, image_bytes)
+        self.assertEqual(extension, "png")
+        self.assertEqual(mime_type, "image/png")
+        self.assertEqual(FakeAsyncClient.submitted_body["model"], model["slug"])
+        self.assertEqual(FakeAsyncClient.submitted_body["width"], 512)
+        self.assertEqual(FakeAsyncClient.submitted_body["height"], 640)
+        self.assertEqual(FakeAsyncClient.submitted_body["steps"], 6)
 
     def test_blocked_task_keeps_last_progress_and_downloadable_output(self):
         output = "name,linkedin_profile_link\nAda Lovelace,https://www.linkedin.com/in/ada-lovelace/\n"
@@ -2625,10 +2851,15 @@ class ProjectWorkflowTests(unittest.TestCase):
         call = {}
 
         class FakeProcess:
-            returncode = 0
+            def __init__(self):
+                self.returncode = 0
+                self.stdout = asyncio.StreamReader()
+                self.stderr = asyncio.StreamReader()
+                self.stdout.feed_eof()
+                self.stderr.feed_eof()
 
-            async def communicate(self):
-                return b"", b""
+            async def wait(self):
+                return self.returncode
 
         async def fake_create_subprocess(*args, **kwargs):
             call["args"] = args
@@ -2648,6 +2879,8 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertIn("workspace-write", call["args"])
         self.assertIn("--ephemeral", call["args"])
         self.assertIn("Task: Add a regression test", call["args"][-1])
+        logs = self.client.get("/api/project/logs").json()
+        self.assertTrue(any("completed successfully" in entry["content"] for entry in logs))
 
     def test_failed_project_run_blocks_task_and_retry_requeues_it(self):
         workspace = self._workspace()
@@ -2674,6 +2907,50 @@ class ProjectWorkflowTests(unittest.TestCase):
             conn.close()
         self.assertEqual(task["status"], "assigned")
         self.assertEqual(retry_history, 1)
+
+    def test_terminal_task_chat_resumes_same_task_and_preserves_previous_output(self):
+        agent = next(
+            item for item in self.client.get("/api/agents").json()
+            if item["role"] == "Lead Generation"
+        )
+        now = main.now_iso()
+        conn = main.get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO tasks (id,title,description,assigned_agent_id,status,priority,output,result,"
+                "execution_mode,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                ("task_resume_chat", "Create a prospect report", "Build the report.", agent["id"],
+                 "blocked", "high", "Previous verified output.", "Search provider unavailable.",
+                 "deliverable", now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        response = self.client.post(
+            "/api/tasks/task_resume_chat/chat",
+            json={"content": "Please resume from last and convert the result to Word."},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["resumed"])
+        conn = main.get_conn()
+        try:
+            task = conn.execute(
+                "SELECT status,description,output,result FROM tasks WHERE id='task_resume_chat'"
+            ).fetchone()
+            history = conn.execute(
+                "SELECT status,output FROM task_history WHERE task_id='task_resume_chat'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(task["status"], "assigned")
+        self.assertIn("convert the result to Word", task["description"])
+        self.assertEqual(task["output"], "")
+        self.assertEqual(history["status"], "blocked")
+        self.assertIn("Previous verified output.", history["output"])
+        chat = self.client.get("/api/tasks/task_resume_chat/chat").json()
+        self.assertTrue(any("Previous run output is preserved" in message["content"] for message in chat))
+        self.assertFalse(any(message.get("task_id") == "task_resume_chat" for message in self.client.get("/api/messages").json()))
 
     def test_specialist_escalates_to_engineering_and_gets_result_back(self):
         conn = main.get_conn()

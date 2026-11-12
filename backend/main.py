@@ -29,6 +29,9 @@ import gzip
 import threading
 import hmac
 import sys
+import ipaddress
+import socket
+import zipfile
 from datetime import datetime, timezone, timedelta
 from email.header import decode_header, make_header
 from email.message import EmailMessage
@@ -38,6 +41,7 @@ from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
+from xml.sax.saxutils import escape as xml_escape
 
 import httpx
 from dotenv import dotenv_values, load_dotenv, set_key, unset_key
@@ -642,7 +646,18 @@ def init_db() -> None:
             receiver TEXT NOT NULL,
             content TEXT NOT NULL,
             timestamp TEXT NOT NULL,
-            read INTEGER NOT NULL DEFAULT 0
+            read INTEGER NOT NULL DEFAULT 0,
+            task_id TEXT,
+            reply_to_id TEXT,
+            scope TEXT NOT NULL DEFAULT 'team'
+        );
+
+        CREATE TABLE IF NOT EXISTS engineering_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            stream TEXT NOT NULL,
+            content TEXT NOT NULL,
+            timestamp TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS accounts (
@@ -768,6 +783,16 @@ def init_db() -> None:
     task_cols = {row["name"] for row in c.execute("PRAGMA table_info(tasks)").fetchall()}
     if "archived_at" not in task_cols:
         c.execute("ALTER TABLE tasks ADD COLUMN archived_at TEXT")
+    message_cols = {row["name"] for row in c.execute("PRAGMA table_info(messages)").fetchall()}
+    for column, definition in (
+        ("task_id", "TEXT"),
+        ("reply_to_id", "TEXT"),
+        ("scope", "TEXT NOT NULL DEFAULT 'team'"),
+    ):
+        if column not in message_cols:
+            c.execute(f"ALTER TABLE messages ADD COLUMN {column} {definition}")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_messages_task_thread ON messages(task_id,scope,timestamp)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_engineering_logs_task ON engineering_logs(task_id,id)")
     file_cols = {row["name"] for row in c.execute("PRAGMA table_info(files)").fetchall()}
     if "compressed" not in file_cols:
         c.execute("ALTER TABLE files ADD COLUMN compressed INTEGER NOT NULL DEFAULT 0")
@@ -817,6 +842,10 @@ def init_db() -> None:
         "use_nvidia": "1",
         "together_api_key": "",
         "use_together": "1",
+        "deapi_api_key": "",
+        "deapi_models": "[]",
+        "deapi_image_model": "",
+        "deapi_video_model": "",
         "auto_failover": "1",
         "openrouter_model_index": "0",
         "groq_model_index": "0",
@@ -1304,6 +1333,18 @@ class MessageIn(BaseModel):
     sender: str
     receiver: str
     content: str
+    reply_to_id: Optional[str] = None
+    scope: str = "team"
+
+
+class TaskChatIn(BaseModel):
+    content: str
+    reply_to_id: Optional[str] = None
+
+
+class ProjectChatIn(BaseModel):
+    content: str
+    reply_to_id: Optional[str] = None
 
 
 class OperationsPauseIn(BaseModel):
@@ -1401,6 +1442,11 @@ class SelectModelIn(BaseModel):
     model: str
 
 
+class MediaModelIn(BaseModel):
+    media_type: str
+    model: str
+
+
 @app.get("/api/project/settings")
 def get_project_settings():
     workspace = get_config("project_workspace", "")
@@ -1431,6 +1477,147 @@ def set_project_settings(payload: ProjectWorkspaceIn):
     set_config("project_workspace", workspace)
     log_activity("user", "updated_project_workspace", workspace)
     return get_project_settings()
+
+
+@app.get("/api/project/logs")
+def get_project_logs(limit: int = 500):
+    limit = max(1, min(int(limit), 1000))
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT l.id,l.task_id,l.stream,l.content,l.timestamp,t.title AS task_title "
+            "FROM engineering_logs l LEFT JOIN tasks t ON t.id=l.task_id "
+            "ORDER BY l.id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+    finally:
+        conn.close()
+
+
+@app.get("/api/project/chat")
+def get_project_chat():
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM (SELECT * FROM messages WHERE scope='project' "
+            "ORDER BY timestamp DESC LIMIT 200) ORDER BY timestamp ASC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+@app.post("/api/project/chat")
+async def post_project_chat(payload: ProjectChatIn):
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="Message cannot be empty.")
+    conn = get_conn()
+    quoted_content = ""
+    try:
+        engineering = conn.execute(
+            "SELECT id,name,role,job_profile FROM agents WHERE name='Engineering' AND is_active=1"
+        ).fetchone()
+        if not engineering:
+            raise HTTPException(status_code=503, detail="The Engineering agent is not configured.")
+        if payload.reply_to_id:
+            parent = conn.execute(
+                "SELECT id,content,sender FROM messages WHERE id=? AND scope='project'",
+                (payload.reply_to_id,),
+            ).fetchone()
+            if not parent:
+                raise HTTPException(status_code=400, detail="Reply target is not part of the Engineering project chat.")
+            quoted_content = f"{parent['sender']}: {parent['content'][:900]}"
+        conn.execute(
+            "INSERT INTO messages (id,sender,receiver,content,timestamp,read,reply_to_id,scope) "
+            "VALUES (?,?,?,?,?,0,?,'project')",
+            ("msg_" + uuid.uuid4().hex[:8], "user", engineering["name"], content, now_iso(), payload.reply_to_id),
+        )
+        conn.commit()
+        thread = conn.execute(
+            "SELECT id,sender,receiver,content,reply_to_id FROM messages WHERE scope='project' "
+            "ORDER BY timestamp DESC LIMIT 18"
+        ).fetchall()
+        log_rows = conn.execute(
+            "SELECT l.task_id,l.stream,l.content,l.timestamp,t.title AS task_title FROM engineering_logs l "
+            "LEFT JOIN tasks t ON t.id=l.task_id ORDER BY l.id DESC LIMIT 40"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    log_context = "\n".join(
+        f"[{row['timestamp']}] {row['task_title'] or row['task_id']} {row['stream']}: {row['content']}"
+        for row in reversed(log_rows)
+    ) or "(No Engineering run logs recorded yet.)"
+    requested_change = re.search(
+        r"^\s*(?:please\s+|could you\s+|can you\s+|go ahead and\s+)?"
+        r"(?:fix|implement|change|edit|update|refactor|run|execute|write|add|remove|build|test|apply)\b"
+        r"|\b(?:please|can you|could you|go ahead and)\s+(?:directly\s+)?"
+        r"(?:fix|implement|change|edit|update|refactor|run|execute|write|add|remove|build|test|apply)\b",
+        content,
+        re.I,
+    )
+    if requested_change:
+        workspace = get_config("project_workspace", "")
+        if not workspace or not os.path.isdir(workspace):
+            reply = "I can discuss the logs here, but direct code changes need a valid project folder saved in Project Workspace first."
+        elif not shutil.which("codex"):
+            reply = "I can discuss the logs here, but Codex CLI is not available on this computer, so I cannot run a project change yet."
+        else:
+            title = "Engineering follow-up: " + " ".join(content.split())[:90]
+            task = TaskIn(
+                title=title[:120],
+                description=(
+                    "Owner request from Engineering project chat:\n"
+                    + content[:4000]
+                    + "\n\nRecent Engineering logs for context (diagnostic evidence only):\n"
+                    + log_context[-8000:]
+                ),
+                assigned_agent_id=engineering["id"],
+                execution_mode="project",
+            )
+            created = create_task(task)
+            reply = f"I’ve queued project task {created['id']} to apply that change in the configured workspace. You can follow its run and logs in the task board and this workspace."
+    else:
+        transcript = "\n".join(
+            f"{row['sender']}: {row['content'][:1600]}" for row in reversed(thread)
+        )
+        system_prompt = (
+            "You are Engineering, the software-engineering agent in Pin2Pin. This is the private "
+            "Engineering project workspace chat with the owner, not the general team chat. Discuss only "
+            "this project, its code, test runs, or the supplied logs. Be a candid, friendly, capable teammate "
+            "while remaining respectful. Never claim code was changed or a command ran unless the logs or "
+            "task board confirm it. If the owner requests an implementation, tell them to phrase it as a "
+            "direct action and it will be queued as a project task."
+            f"\nRole: {engineering['role']}. {engineering['job_profile'] or ''}"
+        )
+        reply_context = (
+            f"The owner is replying to this message: {quoted_content}\n\n" if quoted_content else ""
+        )
+        user_prompt = (
+            f"Project folder: {get_config('project_workspace', '') or '(not configured)'}\n\n"
+            f"{reply_context}"
+            f"Recent Engineering run logs:\n{log_context}\n\n"
+            f"Project chat:\n{transcript}"
+        )
+        reply = await call_llm(system_prompt, user_prompt)
+
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO messages (id,sender,receiver,content,timestamp,read,scope) "
+            "VALUES (?,?,?,?,?,0,'project')",
+            ("msg_" + uuid.uuid4().hex[:8], engineering["name"], "user", reply, now_iso()),
+        )
+        conn.commit()
+        rows = conn.execute(
+            "SELECT * FROM (SELECT * FROM messages WHERE scope='project' "
+            "ORDER BY timestamp DESC LIMIT 200) ORDER BY timestamp ASC"
+        ).fetchall()
+        return {"messages": [dict(row) for row in rows], "reply": reply}
+    finally:
+        conn.close()
 
 
 @app.get("/api/profile")
@@ -1809,10 +1996,19 @@ def _register_output_media_files(conn: sqlite3.Connection, task: dict) -> list[d
 @app.get("/api/tasks")
 def list_tasks(include_archived: bool = False):
     conn = get_conn()
+    visible_filter = "" if include_archived else (
+        "WHERE t.archived_at IS NULL AND (t.status NOT IN ('done','rejected','blocked') "
+        "OR t.id IN (SELECT id FROM tasks WHERE archived_at IS NULL AND status='done' "
+        "ORDER BY updated_at DESC LIMIT 7) "
+        "OR t.id IN (SELECT id FROM tasks WHERE archived_at IS NULL AND status='rejected' "
+        "ORDER BY updated_at DESC LIMIT 7) "
+        "OR t.id IN (SELECT id FROM tasks WHERE archived_at IS NULL AND status='blocked' "
+        "ORDER BY updated_at DESC LIMIT 7)) "
+    )
     rows = conn.execute(
         "SELECT t.*, a.name AS agent_name, a.role AS agent_role FROM tasks t "
         "LEFT JOIN agents a ON t.assigned_agent_id=a.id "
-        + ("" if include_archived else "WHERE t.archived_at IS NULL ")
+        + visible_filter
         + "ORDER BY t.created_at DESC"
     ).fetchall()
     media_by_task: dict[str, list[dict]] = {}
@@ -2056,6 +2252,77 @@ def approve_task(task_id: str, payload: ApprovalIn):
     return {"ok": True}
 
 
+def _queue_task_resume(
+    conn: sqlite3.Connection,
+    task: sqlite3.Row,
+    follow_up: str = "",
+    history_status: Optional[str] = None,
+) -> str:
+    if task["status"] not in ("done", "rejected", "blocked"):
+        raise HTTPException(status_code=409, detail="Only completed, rejected, or blocked tasks can be resumed.")
+    if task["execution_mode"] == "project":
+        workspace = get_config("project_workspace", "")
+        if not workspace or not os.path.isdir(workspace):
+            raise HTTPException(status_code=409, detail="Set a valid project workspace before resuming.")
+        if not shutil.which("codex"):
+            raise HTTPException(status_code=503, detail="Codex CLI is not installed or is not available on the server PATH.")
+
+    agent_id = task["assigned_agent_id"]
+    agent = conn.execute("SELECT * FROM agents WHERE id=?", (agent_id,)).fetchone() if agent_id else None
+    if not agent:
+        if task["execution_mode"] == "project":
+            agent = conn.execute("SELECT * FROM agents WHERE role='Software Engineering'").fetchone()
+        else:
+            agent_name = _guess_assignee(task["title"] + " " + task["description"]) or "Lead Gen"
+            agent = conn.execute("SELECT * FROM agents WHERE name=?", (agent_name,)).fetchone()
+        if not agent:
+            raise HTTPException(status_code=503, detail="No available agent can be assigned to this task.")
+        agent_id = agent["id"]
+
+    now = now_iso()
+    previous_output = (task["output"] or "").strip()
+    previous_result = (task["result"] or "").strip()
+    history_output = previous_output
+    if previous_result:
+        history_output = (history_output + "\n\n" if history_output else "") + "Previous result:\n" + previous_result
+    conn.execute(
+        "INSERT INTO task_history (id,task_id,title,agent_name,status,output,created_at,finished_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        ("th_" + uuid.uuid4().hex[:8], task["id"], task["title"], agent["name"],
+         history_status or task["status"], history_output, task["created_at"], now),
+    )
+    description = task["description"] or ""
+    if follow_up:
+        description = (description.rstrip() + "\n\nOwner follow-up for this run:\n" + follow_up.strip()).strip()
+    conn.execute(
+        "UPDATE tasks SET assigned_agent_id=?,description=?,status='assigned',output='',result='',"
+        "needs_approval=0,approved_by_user=0,started_at=NULL,progress_percent=0,"
+        "progress_summary='Resumed from the task conversation; waiting for the agent to start.',"
+        "progress_eta_seconds=NULL,progress_updated_at=?,archived_at=NULL,updated_at=? WHERE id=?",
+        (agent_id, description, now, now, task["id"]),
+    )
+    conn.execute(
+        "UPDATE agents SET status='assigned',current_task_id=? WHERE id=?",
+        (task["id"], agent_id),
+    )
+    conn.commit()
+    if history_output:
+        conn.execute(
+            "INSERT INTO messages (id,sender,receiver,content,timestamp,read,task_id,scope) "
+            "VALUES (?,?,?,?,?,0,?,'task')",
+            (
+                "msg_" + uuid.uuid4().hex[:8],
+                agent["name"],
+                "user",
+                "Previous run output is preserved in task history:\n\n" + history_output[:12000],
+                now,
+                task["id"],
+            ),
+        )
+        conn.commit()
+    return agent["name"]
+
+
 @app.post("/api/tasks/{task_id}/retry")
 def retry_task(task_id: str):
     conn = get_conn()
@@ -2063,55 +2330,121 @@ def retry_task(task_id: str):
         task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found.")
-        if task["status"] != "blocked":
-            raise HTTPException(status_code=409, detail="Only blocked tasks can be retried.")
-        if task["execution_mode"] == "project":
-            workspace = get_config("project_workspace", "")
-            if not workspace or not os.path.isdir(workspace):
-                raise HTTPException(status_code=409, detail="Set a valid project workspace before retrying.")
-            if not shutil.which("codex"):
-                raise HTTPException(status_code=503, detail="Codex CLI is not installed or is not available on the server PATH.")
-        agent_id = task["assigned_agent_id"]
-        agent = conn.execute("SELECT * FROM agents WHERE id=?", (agent_id,)).fetchone() if agent_id else None
-        if not agent:
-            if task["execution_mode"] == "project":
-                agent = conn.execute("SELECT * FROM agents WHERE role='Software Engineering'").fetchone()
-            else:
-                agent_name = _guess_assignee(task["title"] + " " + task["description"]) or "Lead Gen"
-                agent = conn.execute("SELECT * FROM agents WHERE name=?", (agent_name,)).fetchone()
-            if not agent:
-                raise HTTPException(status_code=503, detail="No available agent can be assigned to this task.")
-            agent_id = agent["id"]
-        now = now_iso()
-        conn.execute(
-            "UPDATE tasks SET assigned_agent_id=?, status='assigned', output='', result='',started_at=NULL,"
-            "progress_percent=0,progress_summary='Retry queued; waiting for the agent to start.',"
-            "progress_eta_seconds=NULL,progress_updated_at=?,updated_at=? WHERE id=?",
-            (agent_id, now, now, task_id),
-        )
-        conn.execute(
-            "INSERT INTO task_history (id,task_id,title,agent_name,status,output,created_at,finished_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (
-                "th_" + uuid.uuid4().hex[:8],
-                task_id,
-                task["title"],
-                agent["name"],
-                "retry",
-                "",
-                now,
-                now,
-            ),
-        )
-        conn.execute(
-            "UPDATE agents SET status='assigned', current_task_id=? WHERE id=?",
-            (task_id, agent_id),
-        )
-        conn.commit()
+        agent_name = _queue_task_resume(conn, task, history_status="retry")
     finally:
         conn.close()
     log_activity("user", "retried_task", task["title"])
-    return {"ok": True, "status": "assigned"}
+    return {"ok": True, "status": "assigned", "agent_name": agent_name}
+
+
+@app.get("/api/tasks/{task_id}/chat")
+def get_task_chat(task_id: str):
+    conn = get_conn()
+    try:
+        if not conn.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Task not found.")
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE task_id=? AND scope='task' ORDER BY timestamp ASC",
+            (task_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+@app.post("/api/tasks/{task_id}/chat")
+async def post_task_chat(task_id: str, payload: TaskChatIn):
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="Message cannot be empty.")
+    conn = get_conn()
+    quoted_content = ""
+    try:
+        task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found.")
+        if payload.reply_to_id:
+            parent = conn.execute(
+                "SELECT id,content,sender FROM messages WHERE id=? AND task_id=? AND scope='task'",
+                (payload.reply_to_id, task_id),
+            ).fetchone()
+            if not parent:
+                raise HTTPException(status_code=400, detail="Reply target is not part of this task conversation.")
+            quoted_content = f"{parent['sender']}: {parent['content'][:900]}"
+        agent = conn.execute("SELECT name,role,job_profile FROM agents WHERE id=?",
+                             (task["assigned_agent_id"],)).fetchone()
+        agent_name = agent["name"] if agent else "CEO"
+        now = now_iso()
+        conn.execute(
+            "INSERT INTO messages (id,sender,receiver,content,timestamp,read,task_id,reply_to_id,scope) "
+            "VALUES (?,?,?,?,?,0,?,?,'task')",
+            ("msg_" + uuid.uuid4().hex[:8], "user", agent_name, content, now, task_id, payload.reply_to_id),
+        )
+        conn.commit()
+        thread = conn.execute(
+            "SELECT sender,receiver,content,timestamp,reply_to_id FROM messages "
+            "WHERE task_id=? AND scope='task' ORDER BY timestamp DESC LIMIT 20",
+            (task_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    resume_intent = bool(re.search(
+        r"\b(resume|continue|restart|retry|redo|re[- ]?run|rework|revise|update|change|fix|apply|modify|"
+        r"regenerate|convert|implement|finish)\b",
+        content,
+        re.I,
+    ))
+    resumed = False
+    if task["status"] in ("done", "rejected", "blocked") and resume_intent:
+        conn = get_conn()
+        try:
+            task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if task and task["status"] in ("done", "rejected", "blocked"):
+                agent_name = _queue_task_resume(conn, task, content)
+                resumed = True
+        finally:
+            conn.close()
+        reply = f"I’ve queued the same task for {agent_name}, keeping its earlier result in task history and adding your follow-up to the instructions."
+    else:
+        transcript = "\n".join(
+            f"{row['sender']}: {row['content'][:1800]}" for row in reversed(thread)
+        )
+        original_output = (task["output"] or task["result"] or "No result was recorded yet.")[:8000]
+        system_prompt = (
+            f"You are {agent_name}, discussing only this existing task with its owner. "
+            "Be direct, clear, and friendly. Do not create a new task, claim work was performed, "
+            "or discuss unrelated team activity. If the owner asks for another change, explain that "
+            "they can ask to resume or apply it here."
+            + (f"\nSpecialist role: {agent['role']}. {agent['job_profile'] or ''}" if agent else "")
+        )
+        reply_context = (
+            f"The owner is replying to this message: {quoted_content}\n\n" if quoted_content else ""
+        )
+        user_prompt = (
+            f"Task: {task['title']}\nStatus: {task['status']}\n"
+            f"Instructions: {task['description'][:5000]}\nPrevious result: {original_output}\n\n"
+            f"{reply_context}"
+            f"Task-only conversation:\n{transcript}"
+        )
+        reply = await call_llm(system_prompt, user_prompt)
+
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO messages (id,sender,receiver,content,timestamp,read,task_id,scope) "
+            "VALUES (?,?,?,?,?,0,?,'task')",
+            ("msg_" + uuid.uuid4().hex[:8], agent_name, "user", reply, now_iso(), task_id),
+        )
+        conn.commit()
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE task_id=? AND scope='task' ORDER BY timestamp ASC",
+            (task_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    _sync_conversation_json()
+    return {"messages": [dict(row) for row in rows], "resumed": resumed, "reply": reply}
 
 
 def _escape_free_rows(text: str) -> Optional[List[List[str]]]:
@@ -2277,6 +2610,92 @@ def _render_task_pdf(text: str, title: str) -> bytes:
     return buffer.getvalue()
 
 
+def _render_task_docx(text: str, title: str) -> bytes:
+    def paragraph(value: str, bold: bool = False) -> str:
+        properties = "<w:rPr><w:b/></w:rPr>" if bold else ""
+        return (
+            "<w:p><w:r>" + properties
+            + '<w:t xml:space="preserve">' + xml_escape(value) + "</w:t></w:r></w:p>"
+        )
+
+    def table(rows: list[list[str]]) -> str:
+        columns = max((len(row) for row in rows), default=1)
+        borders = (
+            '<w:tblBorders><w:top w:val="single" w:sz="4" w:color="CBD5E1"/>'
+            '<w:left w:val="single" w:sz="4" w:color="CBD5E1"/>'
+            '<w:bottom w:val="single" w:sz="4" w:color="CBD5E1"/>'
+            '<w:right w:val="single" w:sz="4" w:color="CBD5E1"/>'
+            '<w:insideH w:val="single" w:sz="4" w:color="CBD5E1"/>'
+            '<w:insideV w:val="single" w:sz="4" w:color="CBD5E1"/></w:tblBorders>'
+        )
+        xml_rows = []
+        for row_index, row in enumerate(rows):
+            cells = []
+            for value in row:
+                cells.append(
+                    "<w:tc><w:tcPr/><w:p><w:r>"
+                    + ("<w:rPr><w:b/></w:rPr>" if row_index == 0 else "")
+                    + '<w:t xml:space="preserve">' + xml_escape(value)
+                    + "</w:t></w:r></w:p></w:tc>"
+                )
+            cells.extend("<w:tc><w:p/></w:tc>" for _ in range(columns - len(row)))
+            xml_rows.append("<w:tr>" + "".join(cells) + "</w:tr>")
+        return "<w:tbl><w:tblPr>" + borders + "</w:tblPr>" + "".join(xml_rows) + "</w:tbl>"
+
+    lines = text.splitlines()
+    body = [paragraph(title or "Task output", bold=True)]
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.strip().startswith("|") and line.strip().endswith("|"):
+            table_lines = []
+            while index < len(lines) and lines[index].strip().startswith("|") and lines[index].strip().endswith("|"):
+                table_lines.append(lines[index].strip())
+                index += 1
+            rows = [
+                [cell.strip() for cell in item.strip("|").split("|")]
+                for item in table_lines
+                if not all(cell.strip() and set(cell.strip()) <= set("-: ") for cell in item.strip("|").split("|"))
+            ]
+            if rows:
+                body.append(table(rows))
+            continue
+        stripped = line.strip()
+        if stripped:
+            heading = re.match(r"^(#{1,3})\s+(.+)$", stripped)
+            body.append(paragraph(heading.group(2) if heading else stripped, bool(heading)))
+        index += 1
+
+    document = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>" + "".join(body)
+        + '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>'
+        '<w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/>'
+        "</w:sectPr></w:body></w:document>"
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        "</Types>"
+    )
+    relationships = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        "</Relationships>"
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as docx:
+        docx.writestr("[Content_Types].xml", content_types)
+        docx.writestr("_rels/.rels", relationships)
+        docx.writestr("word/document.xml", document)
+    return buffer.getvalue()
+
+
 def _task_export(output: str, task: Optional[dict] = None) -> tuple[str, str | bytes, str]:
     """Choose one downloadable format from the shape of the actual output."""
     text = (output or "").strip()
@@ -2289,6 +2708,12 @@ def _task_export(output: str, task: Optional[dict] = None) -> tuple[str, str | b
     )
     if re.search(r"\b(?:plain[- ]?)?text\s+file\b|\.txt\b", task_text, re.I):
         return "txt", text + "\n", "text/plain; charset=utf-8"
+    if re.search(r"\b(?:word\s+(?:document|file)|microsoft\s+word|\.docx)\b", task_text, re.I):
+        return (
+            "docx",
+            _render_task_docx(text, str((task or {}).get("title") or "Task output")),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
     if re.search(r"\bpdf\b|\.pdf\b", task_text, re.I):
         return "pdf", _render_task_pdf(text, str((task or {}).get("title") or "Task output")), "application/pdf"
     if _task_is_prospect_strategy(task or {}):
@@ -2492,20 +2917,32 @@ def export_task_csv(task_id: str):
 @app.get("/api/messages")
 def list_messages():
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM messages ORDER BY timestamp ASC").fetchall()
+    rows = conn.execute(
+        "SELECT * FROM messages WHERE scope='team' ORDER BY timestamp ASC"
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
 @app.post("/api/messages")
 def send_message(msg: MessageIn):
+    if msg.scope != "team":
+        raise HTTPException(status_code=400, detail="Use the matching task or project conversation.")
     def _do():
         conn = get_conn()
         try:
+            if msg.reply_to_id:
+                parent = conn.execute(
+                    "SELECT sender,receiver FROM messages WHERE id=? AND scope='team'",
+                    (msg.reply_to_id,),
+                ).fetchone()
+                if not parent or {parent["sender"], parent["receiver"]} != {msg.sender, msg.receiver}:
+                    raise HTTPException(status_code=400, detail="Reply target is not part of this conversation.")
             mid = "msg_" + uuid.uuid4().hex[:8]
             conn.execute(
-                "INSERT INTO messages (id,sender,receiver,content,timestamp,read) VALUES (?,?,?,?,?,0)",
-                (mid, msg.sender, msg.receiver, msg.content, now_iso()),
+                "INSERT INTO messages (id,sender,receiver,content,timestamp,read,reply_to_id,scope) "
+                "VALUES (?,?,?,?,?,0,?,'team')",
+                (mid, msg.sender, msg.receiver, msg.content, now_iso(), msg.reply_to_id),
             )
             conn.commit()
             log_activity("user", "sent_message", f"to {msg.receiver}: {msg.content[:80]}")
@@ -3180,8 +3617,19 @@ async def agent_reply(msg: MessageIn):
             "WHERE t.output IS NOT NULL AND t.output!='' ORDER BY t.updated_at DESC LIMIT 5"
         ).fetchall()
         hist_rows = conn.execute(
-            "SELECT sender, receiver, content FROM messages ORDER BY timestamp DESC LIMIT 9"
+            "SELECT id,sender,receiver,content,reply_to_id FROM messages WHERE scope='team' "
+            "AND ((sender='user' AND receiver=?) OR (sender=? AND receiver='user')) "
+            "ORDER BY timestamp DESC LIMIT 9",
+            (msg.receiver, msg.receiver),
         ).fetchall()
+        reply_target = None
+        if msg.reply_to_id:
+            reply_target = conn.execute(
+                "SELECT sender,receiver,content FROM messages WHERE id=? AND scope='team'",
+                (msg.reply_to_id,),
+            ).fetchone()
+            if not reply_target or {reply_target["sender"], reply_target["receiver"]} != {"user", msg.receiver}:
+                raise HTTPException(status_code=400, detail="Reply target is not part of this conversation.")
         recent_owner_rows = conn.execute(
             "SELECT timestamp,content FROM messages WHERE sender='user' ORDER BY timestamp DESC LIMIT 4"
         ).fetchall()
@@ -3254,7 +3702,12 @@ async def agent_reply(msg: MessageIn):
         if not (r["sender"] == "user" and r["content"] == msg.content)
     ][-8:]
     history = "\n".join(
-        f"{r['sender']} -> {r['receiver']}: {r['content'][:300]}" for r in history_msgs
+        f"{r['sender']} -> {r['receiver']}: {r['content'][:300]}"
+        + (
+            f" [replying to: {next((parent['content'][:220] for parent in history_msgs if parent['id'] == r['reply_to_id']), 'earlier message')}]"
+            if r["reply_to_id"] else ""
+        )
+        for r in history_msgs
     )
     recent_owner_context = "\n".join(
         f"- {r['timestamp']}: {_redact_conversation_secrets(r['content'])[:700]}"
@@ -3368,10 +3821,16 @@ async def agent_reply(msg: MessageIn):
         )
     created_text = "\n".join(truths) if truths else "NONE"
 
+    reply_context = (
+        f"The owner is replying directly to {reply_target['sender']}'s message: "
+        f"{reply_target['content'][:900]}\n\n"
+        if reply_target else ""
+    )
     user_prompt = (
         f"Local computer date/time: {datetime.now().astimezone().strftime('%A, %d %B %Y %H:%M:%S %Z')}.\n"
         f"Most recent owner messages for follow-up context (unrelated asks are not current instructions):\n"
         f"{recent_owner_context or '(none)'}\n\n"
+        f"{reply_context}"
         f"The owner of the company messaged you directly: \"{msg.content}\"\n\n"
         f"You are the {role} on the Pin2Pin team supporting the owner's company.\n"
         f"Company profile:\n{_company_prompt_context()}\n"
@@ -5338,7 +5797,9 @@ class MediaGenerationError(RuntimeError):
 
 
 def _requested_media_types(task: dict) -> list[str]:
-    text = " ".join(str(task.get(key) or "") for key in ("title", "description", "context"))
+    # `context` can contain old conversation and prior failures; only the task's
+    # own title and instructions decide whether media generation is requested.
+    text = " ".join(str(task.get(key) or "") for key in ("title", "description"))
     action = r"(?:generate|create|make|produce|render|design|draw)"
     media_terms = {
         "video": r"(?:video(?:\s+files?)?|reels?|animations?|clips?)",
@@ -5354,7 +5815,7 @@ def _requested_media_types(task: dict) -> list[str]:
             if not re.search(rf"\b{terms}\b", clause, re.I):
                 continue
             if re.search(
-                rf"\b(?:do\s+not|don['’]?t|never|avoid|skip|without)\b.{{0,60}}"
+                rf"\b(?:do\s+not|don['’]?t|never|avoid|skip|without|not\s+requested|no\s+need\s+to)\b.{{0,60}}"
                 rf"\b(?:{action}|{terms})\b|\bno\s+(?:actual\s+)?{terms}\s+(?:files?|assets?)\b",
                 clause,
                 re.I,
@@ -5378,16 +5839,23 @@ def _requested_media_types(task: dict) -> list[str]:
 
 
 def _requested_video_duration_seconds(task: dict) -> int:
-    text = " ".join(str(task.get(key) or "") for key in ("title", "description", "context"))
+    text = " ".join(str(task.get(key) or "") for key in ("title", "description"))
     match = re.search(r"\b(\d{1,3})\s*-?\s*(?:seconds?|secs?|s)\b", text, re.I)
     if not match:
         return 8
     seconds = int(match.group(1))
     if not 3 <= seconds <= 15:
         raise MediaGenerationError(
-            f"Gemini Omni currently supports 3–15 second clips; the request specifies {seconds} seconds."
+            f"The currently configured video workflow supports 3–15 second clips; the request specifies {seconds} seconds."
         )
     return seconds
+
+
+def _explicit_video_duration_seconds(task: dict) -> Optional[int]:
+    text = " ".join(str(task.get(key) or "") for key in ("title", "description"))
+    if not re.search(r"\b\d{1,3}\s*-?\s*(?:seconds?|secs?|s)\b", text, re.I):
+        return None
+    return _requested_video_duration_seconds(task)
 
 
 async def _generate_gemini_media(
@@ -5472,6 +5940,358 @@ async def _generate_gemini_media(
             return content, match[1], match[2]
     raise MediaGenerationError(
         f"Gemini completed the request but returned no {media_type} asset. No text-only substitute was saved."
+    )
+
+
+DEAPI_BASE_URL = "https://api.deapi.ai"
+
+
+def _deapi_catalog() -> list[dict]:
+    try:
+        catalog = json.loads(get_config("deapi_models", "[]"))
+    except (TypeError, ValueError):
+        return []
+    return catalog if isinstance(catalog, list) else []
+
+
+def _deapi_media_config() -> dict:
+    catalog = _deapi_catalog()
+    return {
+        "provider": "deAPI",
+        "has_key": bool(get_config("deapi_api_key", "")),
+        "image_models": [
+            {"slug": model["slug"], "name": model.get("name") or model["slug"]}
+            for model in catalog if "txt2img" in model.get("inference_types", [])
+        ],
+        "video_models": [
+            {"slug": model["slug"], "name": model.get("name") or model["slug"]}
+            for model in catalog if "txt2video" in model.get("inference_types", [])
+        ],
+        "image_model": get_config("deapi_image_model", ""),
+        "video_model": get_config("deapi_video_model", ""),
+    }
+
+
+def _deapi_response_error(response: httpx.Response, operation: str) -> MediaGenerationError:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    detail = str(payload.get("message") or payload.get("code") or "").strip() if isinstance(payload, dict) else ""
+    if response.status_code in (401, 403):
+        detail = "The deAPI key was rejected or lacks permission."
+    elif response.status_code == 402:
+        detail = "The deAPI key or account limit was reached; check the account balance and key limit."
+    elif response.status_code == 429:
+        detail = "deAPI rate limit reached. Wait for the provider's reset window before retrying."
+    elif response.status_code == 422 and not detail:
+        detail = "The selected deAPI model rejected its parameters. Refresh its model settings and try again."
+    return MediaGenerationError(
+        f"deAPI {operation} failed with HTTP {response.status_code}"
+        + (f": {detail[:300]}" if detail else ".")
+    )
+
+
+async def _fetch_deapi_model_catalog(api_key: str) -> list[dict]:
+    headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+    models: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+            page = 1
+            last_page = 1
+            while page <= last_page:
+                response = await client.get(
+                    f"{DEAPI_BASE_URL}/api/v2/models",
+                    headers=headers,
+                    params={"limit": 50, "page": page},
+                )
+                if response.status_code != 200:
+                    raise _deapi_response_error(response, "model discovery")
+                payload = response.json()
+                data = payload.get("data")
+                if not isinstance(data, list):
+                    raise MediaGenerationError("deAPI model discovery returned an invalid catalog.")
+                for entry in data:
+                    if not isinstance(entry, dict) or not entry.get("slug"):
+                        continue
+                    inference_types = entry.get("inference_types")
+                    if not isinstance(inference_types, list):
+                        continue
+                    if not any(kind in inference_types for kind in ("txt2img", "txt2video")):
+                        continue
+                    info = entry.get("info") if isinstance(entry.get("info"), dict) else {}
+                    models.append({
+                        "slug": str(entry["slug"]),
+                        "name": str(entry.get("name") or entry["slug"]),
+                        "inference_types": [
+                            str(kind) for kind in inference_types if kind in ("txt2img", "txt2video")
+                        ],
+                        "info": {
+                            "defaults": info.get("defaults") if isinstance(info.get("defaults"), dict) else {},
+                            "limits": info.get("limits") if isinstance(info.get("limits"), dict) else {},
+                            "features": info.get("features") if isinstance(info.get("features"), dict) else {},
+                        },
+                    })
+                meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+                try:
+                    last_page = max(1, int(meta.get("last_page", 1)))
+                except (TypeError, ValueError):
+                    raise MediaGenerationError("deAPI returned invalid model-catalog pagination metadata.")
+                if last_page > 20:
+                    raise MediaGenerationError("deAPI model catalog has too many pages to load safely.")
+                page += 1
+    except httpx.RequestError as exc:
+        raise MediaGenerationError(f"Could not reach deAPI model discovery: {exc}") from exc
+    except ValueError as exc:
+        raise MediaGenerationError("deAPI model discovery returned invalid JSON.") from exc
+    return models
+
+
+@app.get("/api/media/config")
+def get_media_config():
+    return _deapi_media_config()
+
+
+@app.post("/api/media/deapi/test-and-list")
+async def test_deapi_media_provider(payload: TestKeyIn):
+    api_key = (payload.api_key or "").strip()
+    if not api_key:
+        return {"ok": False, "message": "Enter a deAPI key first."}
+    try:
+        models = await _fetch_deapi_model_catalog(api_key)
+    except MediaGenerationError as exc:
+        return {"ok": False, "message": str(exc)}
+    set_config("deapi_api_key", api_key)
+    set_config("deapi_models", json.dumps(models))
+    available_images = sum("txt2img" in model["inference_types"] for model in models)
+    available_videos = sum("txt2video" in model["inference_types"] for model in models)
+    return {
+        "ok": True,
+        "message": f"deAPI key verified. {available_images} image model(s) and {available_videos} video model(s) available.",
+        **_deapi_media_config(),
+    }
+
+
+@app.post("/api/media/select-model")
+def select_deapi_media_model(payload: MediaModelIn):
+    media_type = payload.media_type.strip().lower()
+    if media_type not in ("image", "video"):
+        raise HTTPException(status_code=400, detail="Choose image or video media.")
+    if not get_config("deapi_api_key", ""):
+        raise HTTPException(status_code=409, detail="Connect and test a deAPI key before selecting media models.")
+    inference_type = "txt2img" if media_type == "image" else "txt2video"
+    if not payload.model:
+        set_config(f"deapi_{media_type}_model", "")
+        return _deapi_media_config()
+    if not any(
+        model["slug"] == payload.model and inference_type in model.get("inference_types", [])
+        for model in _deapi_catalog()
+    ):
+        raise HTTPException(status_code=400, detail="That model is not available for the selected media type.")
+    set_config(f"deapi_{media_type}_model", payload.model)
+    return _deapi_media_config()
+
+
+def _deapi_model(media_type: str) -> Optional[dict]:
+    model_slug = get_config(f"deapi_{media_type}_model", "")
+    inference_type = "txt2img" if media_type == "image" else "txt2video"
+    return next(
+        (
+            model for model in _deapi_catalog()
+            if model.get("slug") == model_slug and inference_type in model.get("inference_types", [])
+        ),
+        None,
+    )
+
+
+def _deapi_dimension(
+    defaults: dict, limits: dict, name: str, preferred: int
+) -> int:
+    minimum = int(limits.get(f"min_{name}", 256))
+    maximum = int(limits.get(f"max_{name}", 1024))
+    if minimum > maximum:
+        raise MediaGenerationError(f"deAPI model has invalid {name} limits.")
+    value = defaults.get(name)
+    try:
+        value = int(value) if value is not None else min(max(preferred, minimum), maximum)
+    except (TypeError, ValueError):
+        value = min(max(preferred, minimum), maximum)
+    value = min(max(value, minimum), maximum)
+    step = int(limits.get("dimension_multiple") or limits.get("resolution_step") or 1)
+    if step > 1:
+        value = (value // step) * step
+        if value < minimum:
+            value = ((minimum + step - 1) // step) * step
+    if value > maximum:
+        raise MediaGenerationError(f"deAPI model cannot accept a valid {name} resolution.")
+    return value
+
+
+def _deapi_generation_body(
+    media_type: str, model: dict, prompt: str, duration_seconds: Optional[int]
+) -> dict:
+    info = model.get("info") or {}
+    defaults = info.get("defaults") or {}
+    limits = info.get("limits") or {}
+    features = info.get("features") or {}
+    body = {
+        "model": model["slug"],
+        "prompt": prompt[:12000],
+        "width": _deapi_dimension(defaults, limits, "width", 768),
+        "height": _deapi_dimension(defaults, limits, "height", 768),
+        "seed": int(defaults.get("seed") if defaults.get("seed") is not None else uuid.uuid4().int % (2 ** 31)),
+        "enhance_prompt": False,
+    }
+    if features.get("supports_steps"):
+        body["steps"] = int(defaults.get("steps") or limits.get("min_steps") or 1)
+    if features.get("supports_guidance"):
+        body["guidance"] = float(defaults.get("guidance") or limits.get("min_guidance") or 7.5)
+    if media_type == "video":
+        fps_min = int(limits.get("min_fps") or 1)
+        fps_max = int(limits.get("max_fps") or 60)
+        fps = int(defaults.get("fps") or fps_min)
+        fps = min(max(fps, fps_min), fps_max)
+        frames_min = int(limits.get("min_frames") or 1)
+        frames_max = int(limits.get("max_frames") or 300)
+        if duration_seconds:
+            frames = duration_seconds * fps
+            if not frames_min <= frames <= frames_max:
+                raise MediaGenerationError(
+                    f"The selected deAPI video model supports {frames_min}-{frames_max} frames at {fps} fps; "
+                    f"it cannot meet the requested {duration_seconds}-second duration."
+                )
+        else:
+            frames = int(defaults.get("frames") or frames_min)
+            frames = min(max(frames, frames_min), frames_max)
+        body.update({"fps": fps, "frames": frames})
+    return body
+
+
+def _assert_public_result_url(url: str) -> None:
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise MediaGenerationError("deAPI returned an unsafe or unsupported result URL.")
+    try:
+        port = parsed.port or 443
+    except ValueError as exc:
+        raise MediaGenerationError("deAPI returned an invalid result URL.") from exc
+    if port != 443:
+        raise MediaGenerationError("deAPI result URLs must use the standard HTTPS port.")
+    try:
+        addresses = socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise MediaGenerationError("Could not resolve the deAPI media result host.") from exc
+    if not addresses or any(
+        not ipaddress.ip_address(address[4][0]).is_global for address in addresses
+    ):
+        raise MediaGenerationError("deAPI returned a result URL that resolves to a non-public network.")
+
+
+async def _download_deapi_result(client: httpx.AsyncClient, url: str, media_type: str) -> tuple[bytes, str, str]:
+    await asyncio.to_thread(_assert_public_result_url, url)
+    max_bytes = 500 * 1024 * 1024 if media_type == "video" else 40 * 1024 * 1024
+    try:
+        async with client.stream("GET", url) as response:
+            if response.status_code != 200:
+                raise MediaGenerationError(
+                    f"deAPI result download returned HTTP {response.status_code}."
+                )
+            size_header = response.headers.get("content-length")
+            if size_header and int(size_header) > max_bytes:
+                raise MediaGenerationError("Generated media exceeds the local file size limit.")
+            content = bytearray()
+            async for chunk in response.aiter_bytes():
+                content.extend(chunk)
+                if len(content) > max_bytes:
+                    raise MediaGenerationError("Generated media exceeds the local file size limit.")
+    except httpx.RequestError as exc:
+        raise MediaGenerationError(f"Could not download the generated media file: {exc}") from exc
+    data = bytes(content)
+    mime = response.headers.get("content-type", "").split(";", 1)[0].lower()
+    if media_type == "image":
+        formats = (
+            (data.startswith(b"\x89PNG\r\n\x1a\n"), "png", "image/png"),
+            (data.startswith(b"\xff\xd8\xff"), "jpg", "image/jpeg"),
+            (data.startswith(b"RIFF") and data[8:12] == b"WEBP", "webp", "image/webp"),
+        )
+        match = next((item for item in formats if item[0]), None)
+    else:
+        match = (True, "mp4", "video/mp4") if b"ftyp" in data[:16] else None
+    if not match:
+        raise MediaGenerationError(
+            f"deAPI returned unsupported {media_type} media ({mime or 'unknown MIME'})."
+        )
+    return data, match[1], match[2]
+
+
+async def _generate_deapi_media(
+    media_type: str, prompt: str, duration_seconds: Optional[int] = None
+) -> tuple[bytes, str, str]:
+    api_key = get_config("deapi_api_key", "")
+    model = _deapi_model(media_type)
+    if not api_key:
+        raise MediaGenerationError("Connect a deAPI key under Models → Image & video models.")
+    if not model:
+        raise MediaGenerationError(f"Choose an available deAPI {media_type} model under Models.")
+    endpoint = "images" if media_type == "image" else "videos"
+    headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+    body = _deapi_generation_body(media_type, model, prompt, duration_seconds)
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(90.0, connect=20.0), follow_redirects=False
+        ) as client:
+            response = await client.post(
+                f"{DEAPI_BASE_URL}/api/v2/{endpoint}/generations",
+                headers=headers,
+                json=body,
+            )
+            if response.status_code != 200:
+                raise _deapi_response_error(response, f"{media_type} generation")
+            payload = response.json()
+            request_id = str((payload.get("data") or {}).get("request_id") or "")
+            if not request_id:
+                raise MediaGenerationError("deAPI accepted the request but returned no job ID.")
+            deadline = time.monotonic() + 900
+            job = {}
+            while time.monotonic() < deadline:
+                await asyncio.sleep(4)
+                status_response = await client.get(
+                    f"{DEAPI_BASE_URL}/api/v2/jobs/{quote(request_id, safe='')}",
+                    headers=headers,
+                )
+                if status_response.status_code != 200:
+                    raise _deapi_response_error(status_response, "job status")
+                job_payload = status_response.json()
+                job = job_payload.get("data") if isinstance(job_payload.get("data"), dict) else {}
+                status = str(job.get("status") or "").lower()
+                if status == "done":
+                    break
+                if status == "error":
+                    reason = str(job.get("error_reason") or job.get("error_code") or "unknown processing error")
+                    raise MediaGenerationError(f"deAPI media job failed: {reason[:300]}.")
+                if status not in ("pending", "processing"):
+                    raise MediaGenerationError(f"deAPI returned an unknown job status: {status or 'missing'}.")
+            else:
+                raise MediaGenerationError("deAPI media job did not finish within 15 minutes.")
+            result_url = job.get("result_url")
+            if not isinstance(result_url, str) or not result_url:
+                raise MediaGenerationError("deAPI completed the job but returned no result file URL.")
+            return await _download_deapi_result(client, result_url, media_type)
+    except httpx.RequestError as exc:
+        raise MediaGenerationError(f"Could not reach deAPI media generation: {exc}") from exc
+    except ValueError as exc:
+        raise MediaGenerationError("deAPI media generation returned invalid JSON or metadata.") from exc
+
+
+async def _generate_requested_media(
+    media_type: str, prompt: str, duration_seconds: Optional[int] = None
+) -> tuple[bytes, str, str]:
+    if get_config("deapi_api_key", ""):
+        return await _generate_deapi_media(media_type, prompt, duration_seconds)
+    if media_type == "video" and duration_seconds is None:
+        duration_seconds = _requested_video_duration_seconds({"title": prompt})
+    return await _generate_gemini_media(
+        media_type, prompt, duration_seconds
     )
 
 
@@ -6236,6 +7056,46 @@ def _remember_project_task(title: str, output: str) -> None:
             os.remove(temp_path)
 
 
+def _append_engineering_log(task_id: str, stream: str, content: str) -> None:
+    line = _redact_conversation_secrets(content).replace("\x00", "")[:4000]
+    if not line:
+        return
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO engineering_logs (task_id,stream,content,timestamp) VALUES (?,?,?,?)",
+            (task_id, stream, line, now_iso()),
+        )
+        count = conn.execute(
+            "SELECT COUNT(*) AS n FROM engineering_logs WHERE task_id=?", (task_id,)
+        ).fetchone()["n"]
+        if count > 5000:
+            conn.execute(
+                "DELETE FROM engineering_logs WHERE id IN (SELECT id FROM engineering_logs "
+                "WHERE task_id=? ORDER BY id ASC LIMIT ?)",
+                (task_id, count - 4500),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def _stream_engineering_output(reader: asyncio.StreamReader, task_id: str, stream: str) -> str:
+    tail: list[str] = []
+    while True:
+        raw_line = await reader.readline()
+        if not raw_line:
+            break
+        line = raw_line.decode("utf-8", errors="replace").rstrip()
+        if not line:
+            continue
+        _append_engineering_log(task_id, stream, line)
+        tail.append(line[:1200])
+        if len(tail) > 40:
+            del tail[: len(tail) - 40]
+    return "\n".join(tail)
+
+
 async def _run_project_task(row: sqlite3.Row) -> str:
     workspace = get_config("project_workspace", "")
     if not workspace or not os.path.isdir(workspace):
@@ -6247,9 +7107,12 @@ async def _run_project_task(row: sqlite3.Row) -> str:
     memory = _read_agent_memory()
     prompt = (
         "You are the coding agent operating in the user's selected project. Implement the task directly in "
-        "the project files; do not only provide suggestions. Keep edits scoped to the task, preserve unrelated "
-        "changes, do not commit, deploy, publish, or access secrets. Run the most relevant existing tests or "
-        "checks and report exactly what changed and what passed or failed. If the task is ambiguous or unsafe, "
+        "the project files; do not only provide suggestions. First inspect the current files and saved project "
+        "memory, then reuse and adapt existing project work where it still fits; memory is a hint, not proof "
+        "that a change exists. Keep edits scoped to the task, preserve unrelated changes, do not commit, deploy, "
+        "publish, or access secrets. Run the most relevant existing tests or checks after edits and report the "
+        "exact commands, exit results, and what passed or failed. If the task requests a text, Word, CSV, or PDF "
+        "deliverable, create that format and do not start unrelated image/video generation. If the task is ambiguous or unsafe, "
         "stop and explain the blocker instead of guessing. For code requests, the code and its verification are "
         "the primary deliverables; a data target mentioned as something the program should later fetch does not "
         "mean you must fabricate that dataset. If the request explicitly asks for both the program and a run of it, "
@@ -6279,11 +7142,16 @@ async def _run_project_task(row: sqlite3.Row) -> str:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        _append_engineering_log(row["id"], "system", f"Started Codex in {workspace}")
+        stdout_task = asyncio.create_task(_stream_engineering_output(process.stdout, row["id"], "stdout"))
+        stderr_task = asyncio.create_task(_stream_engineering_output(process.stderr, row["id"], "stderr"))
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=900)
+            await asyncio.wait_for(process.wait(), timeout=900)
         except asyncio.TimeoutError:
             process.kill()
-            await process.communicate()
+            await process.wait()
+            await asyncio.gather(stdout_task, stderr_task)
+            _append_engineering_log(row["id"], "system", "Codex timed out after 15 minutes.")
             return "❌ Codex task timed out after 15 minutes. No result was reported."
         except asyncio.CancelledError:
             if process.returncode is None:
@@ -6291,20 +7159,27 @@ async def _run_project_task(row: sqlite3.Row) -> str:
                     process.kill()
                 except ProcessLookupError:
                     pass
-            await process.communicate()
+            await process.wait()
+            await asyncio.gather(stdout_task, stderr_task)
+            _append_engineering_log(row["id"], "system", "Codex run cancelled.")
             raise
 
+        stdout_tail, stderr_tail = await asyncio.gather(stdout_task, stderr_task)
         with open(output_path, "r", encoding="utf-8") as result_file:
             result = result_file.read().strip()
         if process.returncode != 0:
-            detail = (stderr or stdout).decode("utf-8", errors="replace").strip()
+            detail = stderr_tail or stdout_tail
+            _append_engineering_log(
+                row["id"], "system", f"Codex exited with status {process.returncode}."
+            )
             return f"❌ Codex exited with status {process.returncode}: {detail[-1200:] or 'No details returned.'}"
         if not result:
-            result = stdout.decode("utf-8", errors="replace").strip()
-        if not result:
+            _append_engineering_log(row["id"], "system", "Codex returned no task summary.")
             return "❌ Codex exited successfully but did not return a task summary."
+        _append_engineering_log(row["id"], "system", "Codex process completed successfully.")
         return result[:16000]
     except OSError as exc:
+        _append_engineering_log(row["id"], "system", f"Could not start Codex CLI: {exc}")
         return f"❌ Could not start Codex CLI: {exc}"
     finally:
         if os.path.exists(output_path):
@@ -7723,26 +8598,38 @@ async def _process_workers() -> None:
                     output = _normalize_task_output(output)
 
             media_types = _requested_media_types(dict(row)) if not is_project_task else []
+            media_failure = ""
             if output and not research_blocker and media_types:
                 saved_media = []
-                media_prompt = (
-                    f"Create an original {', '.join(media_types)} asset that fulfills this exact user request:\n"
-                    f"{row['title']}\n{row['description']}\n\n"
-                    f"Content draft and brand context:\n{output[:4000]}\n\n"
-                    f"Use the provided company profile as brand context ({_company_prompt_context()}). "
-                    "Do not include real personal data, "
-                    "third-party logos, or a claim that the asset is published."
+                prompt_system = (
+                    "You are a professional visual-production prompt writer. Write one specific, "
+                    "production-ready prompt for the requested image or video asset. Include subject, "
+                    "composition, scene/action, lighting, style, aspect/orientation when clear, and brand "
+                    "context. Preserve the user's actual product facts. Do not invent text that must appear "
+                    "in the image, use third-party logos, or include real personal data. Return only the prompt."
                 )
+                media_prompt = await call_llm(
+                    prompt_system,
+                    f"Requested media: {', '.join(media_types)}\n"
+                    f"Task title: {row['title']}\nTask instructions: {row['description'][:5000]}\n\n"
+                    f"Approved content draft and brand context:\n{output[:4000]}\n\n"
+                    f"Company profile:\n{_company_prompt_context()}",
+                )
+                media_prompt = re.sub(r"^\s*```(?:text)?\s*|\s*```\s*$", "", media_prompt, flags=re.I).strip()
+                if len(media_prompt) < 30:
+                    media_failure = "The prompt model did not return a usable, specific media prompt."
                 for media_type in media_types:
+                    if media_failure:
+                        break
                     _set_task_progress(
                         tid, 82,
-                        f"Generating the requested {media_type} asset with Google Gemini and saving it to Files.",
+                        f"Submitting the requested {media_type} asset to the selected media model and saving it to Files.",
                     )
                     try:
                         duration_seconds = (
-                            _requested_video_duration_seconds(dict(row)) if media_type == "video" else None
+                            _explicit_video_duration_seconds(dict(row)) if media_type == "video" else None
                         )
-                        content, extension, mime_type = await _generate_gemini_media(
+                        content, extension, mime_type = await _generate_requested_media(
                             media_type, media_prompt, duration_seconds
                         )
                         saved_media.append(
@@ -7752,18 +8639,21 @@ async def _process_workers() -> None:
                             )
                         )
                     except (MediaGenerationError, OSError, sqlite3.Error) as exc:
-                        research_blocker = (
-                            f"The user requested an actual {media_type} file, but media generation or saving failed: {exc}"
+                        media_failure = (
+                            f"The requested {media_type} asset was not generated or saved: {exc}"
                         )
                         break
                 if saved_media:
                     output += "\n\nGenerated media assets saved in Files:\n" + "\n".join(
                         f"- {item['name']}" for item in saved_media
                     )
-                if research_blocker:
-                    output += f"\n\n{research_blocker}"
+                if media_failure:
+                    output += (
+                        "\n\nMEDIA GENERATION INCOMPLETE (text deliverable retained): "
+                        + media_failure
+                    )
 
-            if output and not research_blocker:
+            if output and not research_blocker and not media_failure:
                 _set_task_progress(tid, 95, "Agent prepared a result; submitting it for CEO review.")
             if research_blocker and not output:
                 output = research_blocker
@@ -7788,7 +8678,7 @@ async def _process_workers() -> None:
                         "Complete what is possible and report the blocker."
                     )
 
-            failed = bool(research_blocker) or (not output) or output.startswith(("⚠️", "❌"))
+            failed = bool(research_blocker or media_failure) or (not output) or output.startswith(("⚠️", "❌"))
             if role == "Software Engineering" and _return_engineering_result(row, output, failed):
                 continue
             email_draft_notice = ""
@@ -7796,7 +8686,7 @@ async def _process_workers() -> None:
                 output, email_draft_notice = _save_email_draft_from_agent_output(tid, output)
                 if email_draft_notice:
                     output = (output.rstrip() + "\n\n" + email_draft_notice).strip()
-            blocker_reason = research_blocker or (output if failed else "")
+            blocker_reason = research_blocker or media_failure or (output if failed else "")
             final_task_status = "blocked" if failed else "review"
             handoffs = _extract_team_handoffs(output) if not failed else []
 

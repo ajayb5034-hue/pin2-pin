@@ -11,6 +11,12 @@ databases, OAuth material, generated files, conversations, and agent memory are 
 by Git. Never commit those files, paste secrets into issues, or use `git add -f` on local
 state. If a credential is accidentally published, revoke it with its provider.
 
+deAPI image and video generation can consume account credits. Connect only a key you
+control, review the provider's model and pricing terms, and remember that task prompts
+and generated assets are sent to the selected external provider. Engineering logs and
+task conversations are stored in the local SQLite database; review them before sharing
+diagnostic output publicly.
+
 External actions must be explicitly approved in the dashboard. Verify the destination
 and content before approving any email or post.
 

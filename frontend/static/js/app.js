@@ -61,6 +61,9 @@ const state = {
   weeklyReports: [],
   config: [],
   project: { workspace_path: "", codex_available: false, codex_command: "", memory: "" },
+  projectLogs: [],
+  projectMessages: [],
+  projectReplyToId: null,
   modelRouter: {
     provider: "openrouter",
     provider_label: "OpenRouter",
@@ -71,18 +74,24 @@ const state = {
     has_key: false,
     selected_model: "",
   },
+  mediaConfig: { provider: "deAPI", has_key: false, image_models: [], video_models: [], image_model: "", video_model: "" },
   availableModels: {},
   lastTest: {},
   health: null,
   profile: { dashboard_name: "Pin2Pin", owner_name: "", company_name: "", complete: false },
   operations: { paused: false, active_tasks: 0, tasks_awaiting_review: 0 },
   chatReceiver: "CEO",
+  replyToMessageId: null,
+  taskChatTaskId: null,
+  taskChatMessages: [],
+  taskChatReplyToId: null,
   selectedAgentId: null,
   activeTab: "dashboard",
   typing: {},
   busy: {},
   pollTimer: null,
   taskProgressTimer: null,
+  projectPollingTimer: null,
   reportPlayerTimer: null,
   reportPlayerIndex: 0,
   reportPlayerData: null,
@@ -171,7 +180,7 @@ function renderOperationsPauseControl() {
 }
 
 async function loadAll() {
-  const [agents, agentSchedules, tasks, messages, accounts, emails, contentPosts, ideas, approvals, suggestions, suggestionStatus, activity, files, reports, router, configRes, health, project, operations, profile] =
+  const [agents, agentSchedules, tasks, messages, accounts, emails, contentPosts, ideas, approvals, suggestions, suggestionStatus, activity, files, reports, router, mediaConfig, configRes, health, project, operations, profile] =
     await Promise.allSettled([
       fetchJson("/api/agents"),
       fetchJson("/api/agent-schedules"),
@@ -188,6 +197,7 @@ async function loadAll() {
       fetchJson("/api/files"),
       fetchJson("/api/weekly-reports"),
       fetchJson("/api/model-router"),
+      fetchJson("/api/media/config"),
       fetchJson("/api/config"),
       fetchJson("/api/health"),
       fetchJson("/api/project/settings"),
@@ -212,6 +222,7 @@ async function loadAll() {
   state.weeklyReports = val(reports, []) || [];
   state.config = val(configRes, []) || [];
   if (router.status === "fulfilled" && router.value) state.modelRouter = router.value;
+  if (mediaConfig.status === "fulfilled" && mediaConfig.value) state.mediaConfig = mediaConfig.value;
   if (health.status === "fulfilled" && health.value) state.health = health.value;
   if (project.status === "fulfilled" && project.value) state.project = project.value;
   if (operations.status === "fulfilled" && operations.value) state.operations = operations.value;
@@ -1179,8 +1190,11 @@ function taskCardHtml(t, compact = false) {
          <button class="btn btn-success btn-sm" data-approve-task="${esc(t.id)}">✅ Approve</button>
          <button class="btn btn-danger btn-sm" data-reject-task="${esc(t.id)}">❌ Reject</button>
        </div>`
-    : t.status === "blocked"
-      ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-retry-task="${esc(t.id)}">↻ Retry task</button></div>`
+    : ["done", "rejected", "blocked"].includes(t.status)
+      ? `<div class="task-actions">
+           ${t.status === "blocked" ? `<button class="btn btn-outline btn-sm" data-retry-task="${esc(t.id)}">↻ Retry task</button>` : ""}
+           <button class="btn btn-primary btn-sm" data-task-chat="${esc(t.id)}">💬 Discuss / resume</button>
+         </div>`
       : "";
   const taskType = t.execution_mode === "project" ? '<span class="task-type">Project change</span>' : "";
   return `
@@ -1231,6 +1245,7 @@ function openTaskDetails(taskId) {
         ${task.output || (task.media_files || []).length ? `<h3>Agent output</h3><div class="task-details-output">${taskOutputHtml(task)}</div>` : `<div class="task-details-empty">No output has been recorded yet.</div>`}
         ${task.needs_approval ? `<div class="task-actions"><button class="btn btn-success btn-sm" data-approve-task="${esc(task.id)}">Approve</button><button class="btn btn-danger btn-sm" data-reject-task="${esc(task.id)}">Reject</button></div>` : ""}
         ${task.status === "blocked" ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-retry-task="${esc(task.id)}">Retry task</button></div>` : ""}
+        ${["done", "rejected", "blocked"].includes(task.status) ? `<div class="task-actions"><button class="btn btn-primary btn-sm" data-task-chat="${esc(task.id)}">💬 Discuss / resume this task</button></div>` : ""}
         ${task.archived_at ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-restore-task="${esc(task.id)}">Restore to board</button></div>` : ""}
         ${["done", "rejected", "blocked"].includes(task.status) && !task.archived_at ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-archive-task="${esc(task.id)}">Hide from board (keep in memory)</button></div>` : ""}
       </section>
@@ -1238,6 +1253,100 @@ function openTaskDetails(taskId) {
     document.getElementById("content").appendChild(overlay);
     overlay.querySelector("button[data-close-task-details]")?.focus({ preventScroll: true });
     saveLastView();
+}
+
+function taskChatMessageHtml(message) {
+  const isOwner = message.sender === "user";
+  const parent = message.reply_to_id
+    ? state.taskChatMessages.find((item) => item.id === message.reply_to_id)
+    : null;
+  const text = esc(message.content).replace(/\n/g, "<br>");
+  return `<div class="msg ${isOwner ? "me" : "them"}">
+    <div style="font-weight:700;font-size:12px;margin-bottom:2px;">${isOwner ? "You" : esc(message.sender)}</div>
+    ${parent ? `<div class="msg-quoted"><b>${parent.sender === "user" ? "You" : esc(parent.sender)}</b> · ${esc(parent.content.slice(0, 180))}</div>` : ""}
+    ${text}
+    <span class="msg-time">${new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+    <button class="msg-reply" type="button" data-reply-task-message="${esc(message.id)}">↩ Reply</button>
+  </div>`;
+}
+
+async function openTaskChat(taskId) {
+  state.taskChatTaskId = taskId;
+  state.taskChatReplyToId = null;
+  try {
+    state.taskChatMessages = await fetchJson(`/api/tasks/${encodeURIComponent(taskId)}/chat`);
+    const task = state.tasks.find((item) => item.id === taskId)
+      || state.archivedTasks.find((item) => item.id === taskId);
+    if (!task) throw new Error("Task details are no longer available.");
+    const existing = document.getElementById("taskChatOverlay");
+    if (existing) existing.remove();
+    const overlay = document.createElement("div");
+    overlay.id = "taskChatOverlay";
+    overlay.className = "task-chat-overlay";
+    overlay.innerHTML = `
+      <section class="task-chat-dialog" role="dialog" aria-modal="true" aria-labelledby="taskChatTitle">
+        <header class="task-details-header">
+          <div><div class="eyebrow">TASK-ONLY CONVERSATION · ${esc(statusLabel(task.status).toUpperCase())}</div><h2 id="taskChatTitle">${esc(task.title)}</h2></div>
+          <button class="icon-btn" data-close-task-chat aria-label="Close task conversation">×</button>
+        </header>
+        <p class="task-chat-hint">This chat is scoped to this task. Ask about the blocker or output, or say “resume from last” / “apply this change” to continue the same task.</p>
+        <div class="task-chat-messages" id="taskChatMessages">${state.taskChatMessages.map(taskChatMessageHtml).join("") || `<div class="empty-state">No task discussion yet. Ask a question or describe what should change.</div>`}</div>
+        <form class="task-chat-input" id="taskChatForm">
+          <input id="taskChatInput" maxlength="4000" autocomplete="off" placeholder="Discuss this task, or ask to resume it…">
+          <button class="btn btn-primary" type="submit">Send</button>
+        </form>
+      </section>`;
+    document.getElementById("content").appendChild(overlay);
+    overlay.querySelector("#taskChatMessages").scrollTop = overlay.querySelector("#taskChatMessages").scrollHeight;
+    overlay.querySelector("[data-close-task-chat]").addEventListener("click", () => overlay.remove());
+    overlay.querySelector("#taskChatForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      sendTaskChatMessage();
+    });
+    overlay.querySelector("#taskChatMessages").addEventListener("click", (event) => {
+      const reply = event.target.closest("[data-reply-task-message]");
+      if (!reply) return;
+      state.taskChatReplyToId = reply.dataset.replyTaskMessage;
+      const parent = state.taskChatMessages.find((item) => item.id === state.taskChatReplyToId);
+      const input = overlay.querySelector("#taskChatInput");
+      input.placeholder = parent ? `Replying to ${parent.sender}: ${parent.content.slice(0, 70)}` : "Discuss this task…";
+      input.focus({ preventScroll: true });
+    });
+    overlay.querySelector("#taskChatInput").focus({ preventScroll: true });
+  } catch (error) {
+    notify("Could not open task conversation: " + error.message, "error");
+  }
+}
+
+async function sendTaskChatMessage() {
+  const input = document.getElementById("taskChatInput");
+  if (!input || !input.value.trim() || !state.taskChatTaskId) return;
+  const content = input.value.trim();
+  const replyToId = state.taskChatReplyToId;
+  input.value = "";
+  input.disabled = true;
+  try {
+    const response = await fetchJson(`/api/tasks/${encodeURIComponent(state.taskChatTaskId)}/chat`, {
+      method: "POST",
+      body: { content, reply_to_id: replyToId },
+    });
+    state.taskChatMessages = response.messages || [];
+    state.taskChatReplyToId = null;
+    input.placeholder = "Discuss this task, or ask to resume it…";
+    const list = document.getElementById("taskChatMessages");
+    if (list) {
+      list.innerHTML = state.taskChatMessages.map(taskChatMessageHtml).join("");
+      list.scrollTop = list.scrollHeight;
+    }
+    if (response.resumed) notify("Same task queued with your new instructions", "success");
+    await loadAll();
+  } catch (error) {
+    input.value = content;
+    notify("Could not send task message: " + error.message, "error");
+  } finally {
+    input.disabled = false;
+    input.focus({ preventScroll: true });
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1551,12 +1660,130 @@ function renderProject() {
         <p class="config-hint">A short local file is included in future coding tasks so the agent can continue from prior completed work.</p>
         <pre class="project-memory">${esc(project.memory || "No project work has been completed yet.")}</pre>
       </div>
+      <div class="project-workbench">
+        <section class="project-log-panel">
+          <header><div><div class="eyebrow">LIVE ENGINEERING OUTPUT</div><h3>Project run logs</h3></div>
+            <button class="btn btn-outline btn-sm" data-refresh-project-panels>Refresh</button></header>
+          <div class="project-log-lines" id="projectLogLines">${projectLogsHtml()}</div>
+        </section>
+        <section class="project-chat-panel">
+          <header><div><div class="eyebrow">PRIVATE WORKSPACE CHAT</div><h3>Engineering <span>↔ You</span></h3></div></header>
+          <div class="project-chat-messages" id="projectChatMessages">${state.projectMessages.map(projectMessageHtml).join("") || `<div class="empty-state">Ask Engineering about code, a task run, or any line in the logs.</div>`}</div>
+          <form class="project-chat-input" id="projectChatForm">
+            <input id="projectChatInput" maxlength="4000" autocomplete="off" placeholder="Ask Engineering about this project…">
+            <button class="btn btn-primary" type="submit">Send</button>
+          </form>
+        </section>
+      </div>
     </div>
   `;
   const save = document.getElementById("btnSaveWorkspace");
   if (save) save.addEventListener("click", () => saveProjectWorkspace(false));
   const clear = document.getElementById("btnClearWorkspace");
   if (clear) clear.addEventListener("click", () => saveProjectWorkspace(true));
+  document.getElementById("projectChatForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    sendProjectChatMessage();
+  });
+  document.getElementById("projectChatMessages").addEventListener("click", (event) => {
+    const reply = event.target.closest("[data-reply-project-message]");
+    if (!reply) return;
+    state.projectReplyToId = reply.dataset.replyProjectMessage;
+    const parent = state.projectMessages.find((item) => item.id === state.projectReplyToId);
+    const input = document.getElementById("projectChatInput");
+    input.placeholder = parent ? `Replying to ${parent.sender}: ${parent.content.slice(0, 70)}` : "Ask Engineering about this project…";
+    input.focus({ preventScroll: true });
+  });
+  document.getElementById("projectLogLines").addEventListener("click", (event) => {
+    const ask = event.target.closest("[data-ask-log]");
+    if (!ask) return;
+    const input = document.getElementById("projectChatInput");
+    if (input) {
+      input.value = `Explain this Engineering log line and what it means for the task "${ask.dataset.taskTitle}":\n${ask.dataset.askLog}`;
+      input.focus({ preventScroll: true });
+    }
+  });
+  const refresh = document.querySelector("[data-refresh-project-panels]");
+  if (refresh) refresh.addEventListener("click", refreshProjectPanels);
+  if (state.projectPollingTimer) clearInterval(state.projectPollingTimer);
+  state.projectPollingTimer = setInterval(() => {
+    if (state.activeTab === "project") refreshProjectPanels();
+  }, 4000);
+  refreshProjectPanels();
+}
+
+function projectMessageHtml(message) {
+  const parent = message.reply_to_id
+    ? state.projectMessages.find((item) => item.id === message.reply_to_id)
+    : null;
+  return `<div class="msg ${message.sender === "user" ? "me" : "them"}">
+    <div style="font-weight:700;font-size:12px;margin-bottom:2px;">${message.sender === "user" ? "You" : esc(message.sender)}</div>
+    ${parent ? `<div class="msg-quoted"><b>${parent.sender === "user" ? "You" : esc(parent.sender)}</b> · ${esc(parent.content.slice(0, 180))}</div>` : ""}
+    ${esc(message.content).replace(/\n/g, "<br>")}
+    <span class="msg-time">${new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+    <button class="msg-reply" type="button" data-reply-project-message="${esc(message.id)}">↩ Reply</button>
+  </div>`;
+}
+
+function projectLogsHtml() {
+  return state.projectLogs.length
+    ? state.projectLogs.map((entry) => `<div class="project-log-row">
+        <time>${esc(new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</time>
+        <b>${esc(entry.stream)}</b><span>${esc(entry.task_title || entry.task_id)}</span>
+      <pre>${esc(entry.content)}</pre>
+      <button class="project-log-ask" type="button" data-ask-log="${esc(entry.content)}" data-task-title="${esc(entry.task_title || entry.task_id)}">Ask Engineering</button>
+      </div>`).join("")
+    : `<div class="empty-state">Engineering output will appear here while a project task runs.</div>`;
+}
+
+async function refreshProjectPanels() {
+  try {
+    const [logs, messages] = await Promise.all([
+      fetchJson("/api/project/logs?limit=500"),
+      fetchJson("/api/project/chat"),
+    ]);
+    state.projectLogs = logs;
+    state.projectMessages = messages;
+    const logList = document.getElementById("projectLogLines");
+    if (logList) {
+      const nearBottom = logList.scrollHeight - logList.scrollTop - logList.clientHeight < 60;
+      logList.innerHTML = projectLogsHtml();
+      if (nearBottom) logList.scrollTop = logList.scrollHeight;
+    }
+    const chatList = document.getElementById("projectChatMessages");
+    if (chatList) {
+      const nearBottom = chatList.scrollHeight - chatList.scrollTop - chatList.clientHeight < 60;
+      chatList.innerHTML = messages.map(projectMessageHtml).join("")
+        || `<div class="empty-state">Ask Engineering about code, a task run, or any line in the logs.</div>`;
+      if (nearBottom) chatList.scrollTop = chatList.scrollHeight;
+    }
+  } catch (error) {
+    console.warn("Engineering workspace refresh failed:", error.message);
+  }
+}
+
+async function sendProjectChatMessage() {
+  const input = document.getElementById("projectChatInput");
+  if (!input || !input.value.trim()) return;
+  const content = input.value.trim();
+  input.value = "";
+  input.disabled = true;
+  try {
+    const data = await fetchJson("/api/project/chat", {
+      method: "POST",
+      body: { content, reply_to_id: state.projectReplyToId },
+    });
+    state.projectMessages = data.messages || [];
+    state.projectReplyToId = null;
+    input.placeholder = "Ask Engineering about this project…";
+    await refreshProjectPanels();
+  } catch (error) {
+    input.value = content;
+    notify("Engineering chat failed: " + error.message, "error");
+  } finally {
+    input.disabled = false;
+    input.focus({ preventScroll: true });
+  }
 }
 
 async function saveProjectWorkspace(clear) {
@@ -1767,7 +1994,7 @@ function renderChatTab() {
       (message.sender === "user" && message.receiver === receiver) ||
       (message.sender === receiver && message.receiver === "user")
     );
-  const messages = conversation.map(messageHtml).join("");
+  const messages = conversation.map((message) => messageHtml(message, conversation)).join("");
   const typing = Object.keys(state.typing)
     .filter((name) => state.typing[name])
     .map((name) => `<div class="msg them typing">${esc(name)} is typing…</div>`)
@@ -1793,6 +2020,10 @@ function renderChatTab() {
   if (list) {
     list.scrollTop = wasNearBottom ? list.scrollHeight : previousScroll;
     list.addEventListener("scroll", () => { state.chatScrollTop = list.scrollTop; }, { passive: true });
+    list.addEventListener("click", (event) => {
+      const replyButton = event.target.closest("[data-reply-message]");
+      if (replyButton) setTeamReply(replyButton.dataset.replyMessage, "chatInput");
+    });
   }
   const sel = document.getElementById("chatReceiverLive");
   if (sel) {
@@ -1823,17 +2054,32 @@ function buildReceiverOptions() {
   return opts + `<option value="user">👤 You (personal note)</option>`;
 }
 
-function messageHtml(m) {
+function messageHtml(m, conversation = state.messages) {
   const me = m.sender === "user";
   const cls = me ? "msg me" : m.sender === "system" ? "msg sys" : "msg them";
   const name = me ? "You" : esc(m.sender);
   const time = new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const body = esc(m.content).replace(/\n/g, "<br>");
+  const parent = m.reply_to_id ? conversation.find((message) => message.id === m.reply_to_id) : null;
   return `<div class="${cls}">
     <div style="font-weight:700;font-size:12px;margin-bottom:2px;">${name}</div>
+    ${parent ? `<div class="msg-quoted"><b>${esc(parent.sender === "user" ? "You" : parent.sender)}</b> · ${esc(parent.content.slice(0, 180))}</div>` : ""}
     ${body}
     <span class="msg-time">${time}</span>
+    ${m.sender !== "system" ? `<button class="msg-reply" type="button" data-reply-message="${esc(m.id)}">↩ Reply</button>` : ""}
   </div>`;
+}
+
+function setTeamReply(messageId, inputId) {
+  state.replyToMessageId = state.replyToMessageId === messageId ? null : messageId;
+  const input = document.getElementById(inputId);
+  const parent = state.messages.find((message) => message.id === state.replyToMessageId);
+  if (input) {
+    input.placeholder = parent
+      ? `Replying to ${parent.sender === "user" ? "you" : parent.sender}: ${parent.content.slice(0, 80)}`
+      : "Message the team…";
+    input.focus({ preventScroll: true });
+  }
 }
 
 async function sendChat(source) {
@@ -1858,19 +2104,27 @@ async function sendChat(source) {
     content: text,
     timestamp: new Date().toISOString(),
     read: 0,
+    reply_to_id: state.replyToMessageId,
   });
   renderActiveTab(true);
   renderFixedChat(true);
 
   try {
-    await fetchJson("/api/messages", { method: "POST", body: { sender: "user", receiver, content: text } });
+    await fetchJson("/api/messages", {
+      method: "POST",
+      body: { sender: "user", receiver, content: text, reply_to_id: state.replyToMessageId },
+    });
 
     if (receiver !== "user") {
       state.typing[receiver] = true;
       renderActiveTab(true);
       renderFixedChat(true);
-      await fetchJson("/api/agent-reply", { method: "POST", body: { sender: "user", receiver, content: text } });
+      await fetchJson("/api/agent-reply", {
+        method: "POST",
+        body: { sender: "user", receiver, content: text, reply_to_id: state.replyToMessageId },
+      });
     }
+    state.replyToMessageId = null;
     await loadAll();
     renderActiveTab(true);
     renderFixedChat(true);
@@ -1916,6 +2170,13 @@ function renderFixedChat(preserve = false) {
   list.scrollTop = nearBottom || scrollTop == null
     ? list.scrollHeight
     : Math.min(scrollTop, list.scrollHeight - list.clientHeight);
+  if (!list.dataset.replyWired) {
+    list.addEventListener("click", (event) => {
+      const replyButton = event.target.closest("[data-reply-message]");
+      if (replyButton) setTeamReply(replyButton.dataset.replyMessage, "chatInputFixed");
+    });
+    list.dataset.replyWired = "1";
+  }
 
   const sel = document.getElementById("chatReceiverFixed");
   if (sel) {
@@ -2962,6 +3223,13 @@ async function playSavedReport(reportId) {
 function renderModels() {
   const r = state.modelRouter || {};
   const models = r.models || [];
+  const media = state.mediaConfig || {};
+  const imageOptions = (media.image_models || []).map((model) =>
+    `<option value="${esc(model.slug)}" ${media.image_model === model.slug ? "selected" : ""}>${esc(model.name)}</option>`
+  ).join("");
+  const videoOptions = (media.video_models || []).map((model) =>
+    `<option value="${esc(model.slug)}" ${media.video_model === model.slug ? "selected" : ""}>${esc(model.name)}</option>`
+  ).join("");
   const active = r.selected_model || r.active_model || (models.length ? models[0] : "—");
 
   document.getElementById("content").innerHTML = `
@@ -2999,11 +3267,29 @@ function renderModels() {
             <div class="m-status ${m === active ? "m-status-active" : "m-status-inactive"}">${m === active ? "SELECTED" : "available"}</div>
           </div>`).join("") || "<div class='empty'>No models. Configure a provider key first.</div>"}
       </div>
+      <section class="media-models-card card">
+          <div class="section-title">Image & video generation models</div>
+          <p>Connect deAPI to choose an account-enabled image model and video model. A selected deAPI model is used for that media type; otherwise image/video work uses the configured Gemini media path. Generation can consume provider credits.</p>
+          ${!media.has_key ? `<div class="router-notice">Connect deAPI in <button class="inline-link" data-goto="config">Configuration</button> to load available media models.</div>` : ""}
+          <div class="media-model-selects">
+            <label>Image model<select id="deapiImageModel" ${media.has_key && imageOptions ? "" : "disabled"}>
+              <option value="">${media.has_key ? "Use configured fallback" : "Connect deAPI first"}</option>${imageOptions}
+            </select></label>
+            <label>Video model<select id="deapiVideoModel" ${media.has_key && videoOptions ? "" : "disabled"}>
+              <option value="">${media.has_key ? "Use configured fallback" : "Connect deAPI first"}</option>${videoOptions}
+            </select></label>
+          </div>
+          <small>${(media.image_models || []).length} image model(s) · ${(media.video_models || []).length} video model(s) · Generated files are saved in Files.</small>
+      </section>
     </div>
   `;
 
   const btn = document.getElementById("btnSwitchModel");
   if (btn) btn.addEventListener("click", switchModel);
+  ["image", "video"].forEach((kind) => {
+    const select = document.getElementById(kind === "image" ? "deapiImageModel" : "deapiVideoModel");
+    if (select) select.addEventListener("change", () => selectDeapiMediaModel(kind, select.value));
+  });
 }
 
 async function switchModel() {
@@ -3129,6 +3415,25 @@ function renderConfig() {
           </div>`).join("") || "<div class='empty'>No models yet — test a provider key above.</div>"}
       </div>
 
+      <div class="section-title mt-8" style="margin-bottom:8px;">🎬 Image & video generation</div>
+      <div class="card deapi-config-card">
+        <div class="deapi-config-heading">
+          <div><span class="provider-mark provider-mark-deapi" aria-hidden="true">dA</span><b>deAPI.ai media models</b></div>
+          <span class="provider-badge ${state.mediaConfig.has_key ? "badge-active" : "badge-inactive"}">${state.mediaConfig.has_key ? "CONNECTED" : "NOT CONNECTED"}</span>
+        </div>
+        <p>Test your deAPI key to load the image and video models enabled for your account. The key stays server-side in the local ignored <code>backend/.env</code>. Image/video generation can spend deAPI credits; model discovery itself does not generate media.</p>
+        <div class="input-wrap">
+          <label>deAPI key</label>
+          <input id="deapiApiKey" type="password" autocomplete="off" placeholder="${state.mediaConfig.has_key ? "A key is saved — paste a replacement to update it" : "Paste your deAPI key"}">
+          <div class="config-hint"><a href="https://app.deapi.ai/" target="_blank" rel="noopener">Open deAPI account ↗</a></div>
+        </div>
+        <div class="provider-actions">
+          <button class="btn btn-primary" id="btnTestDeapiMedia">🔑 Test key &amp; load models</button>
+          ${state.mediaConfig.has_key ? `<button class="btn btn-outline" id="btnClearDeapiMedia">Disconnect deAPI</button>` : ""}
+        </div>
+        <div id="deapiMediaTestResult" class="test-result"></div>
+        <div class="config-hint">Choose separate image and video models on the Models page. The agents first create a specific prompt, then submit it to the selected model and save the returned file.</div>
+      </div>
       <div class="section-title mt-8" style="margin-bottom:8px;">🌐 Web Research</div>
       <div class="card">
         <div style="font-weight:700;">Live search for research agents</div>
@@ -3162,6 +3467,9 @@ function renderConfig() {
   const failover = document.getElementById("configAutoFailover");
   const profileForm = document.getElementById("companyProfileForm");
   if (profileForm) profileForm.addEventListener("submit", saveCompanyProfile);
+  document.getElementById("btnTestDeapiMedia").addEventListener("click", testDeapiMediaProvider);
+  const clearDeapi = document.getElementById("btnClearDeapiMedia");
+  if (clearDeapi) clearDeapi.addEventListener("click", clearDeapiMediaProvider);
   if (failover) {
     failover.addEventListener("change", async (e) => {
       try {
@@ -3306,6 +3614,80 @@ async function useModel(provider) {
     notify(`Now using ${select.value}`, "success");
   } catch (e) {
     notify("Could not select model: " + e.message, "error");
+  }
+}
+
+async function testDeapiMediaProvider() {
+  const input = document.getElementById("deapiApiKey");
+  const result = document.getElementById("deapiMediaTestResult");
+  const apiKey = input ? input.value.trim() : "";
+  if (!apiKey) {
+    notify("Paste your deAPI key first", "error");
+    return;
+  }
+  if (result) {
+    result.textContent = "Testing key and loading account-enabled media models…";
+    result.className = "test-result test-warning";
+  }
+  try {
+    const response = await fetchJson("/api/media/deapi/test-and-list", {
+      method: "POST",
+      body: { api_key: apiKey },
+    });
+    if (!response.ok) {
+      if (result) {
+        result.textContent = response.message || "deAPI key test failed.";
+        result.className = "test-result test-error";
+      }
+      notify(response.message || "deAPI key test failed.", "error");
+      return;
+    }
+    state.mediaConfig = response;
+    if (input) input.value = "";
+    if (result) {
+      result.textContent = response.message;
+      result.className = "test-result test-success";
+    }
+    await loadAll();
+    renderActiveTab(false);
+    notify("deAPI connected — media models loaded", "success");
+  } catch (error) {
+    if (result) {
+      result.textContent = error.message;
+      result.className = "test-result test-error";
+    }
+    notify("Could not test deAPI key: " + error.message, "error");
+  }
+}
+
+async function clearDeapiMediaProvider() {
+  if (!confirm("Disconnect deAPI and clear its saved key and selected models?")) return;
+  try {
+    await Promise.all([
+      fetchJson("/api/config", { method: "POST", body: { key: "deapi_api_key", value: "" } }),
+      fetchJson("/api/config", { method: "POST", body: { key: "deapi_models", value: "[]" } }),
+      fetchJson("/api/config", { method: "POST", body: { key: "deapi_image_model", value: "" } }),
+      fetchJson("/api/config", { method: "POST", body: { key: "deapi_video_model", value: "" } }),
+    ]);
+    await loadAll();
+    renderActiveTab(false);
+    notify("deAPI disconnected", "info");
+  } catch (error) {
+    notify("Could not disconnect deAPI: " + error.message, "error");
+  }
+}
+
+async function selectDeapiMediaModel(mediaType, model) {
+  try {
+    state.mediaConfig = await fetchJson("/api/media/select-model", {
+      method: "POST",
+      body: { media_type: mediaType, model },
+    });
+    notify(`${mediaType === "image" ? "Image" : "Video"} model updated`, "success");
+  } catch (error) {
+    notify("Could not select media model: " + error.message, "error");
+    await loadAll();
+    renderActiveTab(false);
   }
 }
 
@@ -3542,6 +3924,18 @@ function setupListeners() {
       const overlay = document.getElementById("taskDetailsOverlay");
       if (overlay) overlay.remove();
       saveLastView();
+      return;
+    }
+
+    const closeTaskChat = e.target.closest("[data-close-task-chat]");
+    if (closeTaskChat || e.target.id === "taskChatOverlay") {
+      document.getElementById("taskChatOverlay")?.remove();
+      return;
+    }
+
+    const taskChatButton = e.target.closest("[data-task-chat]");
+    if (taskChatButton) {
+      openTaskChat(taskChatButton.getAttribute("data-task-chat"));
       return;
     }
 
