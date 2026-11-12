@@ -94,13 +94,14 @@ permissions.
 From the project root:
 
 ```powershell
-python -m unittest discover -s tests -p "test_*.py"
+.\venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
 node --check frontend/static/js/app.js
 ```
 
 The tests use temporary databases and mock external services; they do not require
 live model credentials. GitHub Actions runs the complete test suite on Windows
-for supported Python versions on pushes and pull requests.
+for supported Python versions on pushes and pull requests using
+`python -m unittest discover -s tests -p "test_*.py"`.
 
 ## Known limitations
 
@@ -116,6 +117,10 @@ CSRF protection, and an appropriate security review.
 
 Host and Origin checks reduce browser-based risk but do not replace authentication; see
 [SECURITY.md](./SECURITY.md).
+
+**Request protection:** Host and Origin checks prevent other websites from submitting
+requests to the local API. This does not provide a login or protect an instance exposed
+to other devices or networks.
 
 Keep API keys and service credentials in `backend/.env`. The database, credentials,
 conversations, generated files, and agent memory are local runtime data and are
