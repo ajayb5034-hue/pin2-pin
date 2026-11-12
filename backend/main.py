@@ -28,6 +28,7 @@ import ssl
 import gzip
 import threading
 import hmac
+import sys
 from datetime import datetime, timezone, timedelta
 from email.header import decode_header, make_header
 from email.message import EmailMessage
@@ -44,6 +45,14 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Requ
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+
+def _console_print(*values: object, sep: str = " ", end: str = "\n") -> None:
+    text = sep.join(str(value) for value in values)
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    safe_text = text.encode(encoding, errors="backslashreplace").decode(encoding)
+    sys.stdout.write(safe_text + end)
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "team.db")
@@ -236,7 +245,7 @@ def _save_available_models(provider: str, models: List[str]) -> None:
     try:
         set_config(f"{provider}_available_models", json.dumps(models))
     except Exception as e:
-        print("Could not persist available models:", e)
+        _console_print("Could not persist available models:", e)
 
 
 def _load_available_models(provider: str) -> List[str]:
@@ -1051,16 +1060,16 @@ async def _call_provider(provider: str, system_prompt: str, user_prompt: str) ->
     max_tries = len(models_to_try) if auto_failover else 1
     last_error = ""
 
-    print(f"\n{'='*60}")
-    print(f"LLM REQUEST - Provider: {provider} ({pconfig['label']})")
-    print(f"Models to try: {models_to_try[:max_tries]}")
-    print(f"Auto-failover: {auto_failover}, Max tries: {max_tries}")
-    print(f"{'='*60}\n")
+    _console_print(f"\n{'='*60}")
+    _console_print(f"LLM REQUEST - Provider: {provider} ({pconfig['label']})")
+    _console_print(f"Models to try: {models_to_try[:max_tries]}")
+    _console_print(f"Auto-failover: {auto_failover}, Max tries: {max_tries}")
+    _console_print(f"{'='*60}\n")
 
     for idx in range(max_tries):
         model = models_to_try[idx]
         try:
-            print(f"[{idx + 1}/{max_tries}] Calling model: {model}")
+            _console_print(f"[{idx + 1}/{max_tries}] Calling model: {model}")
             async with httpx.AsyncClient(timeout=60) as client:
                 if fmt == "gemini":
                     url = pconfig["url"].format(model=model) + f"?key={api_key}"
@@ -1129,7 +1138,7 @@ async def _call_provider(provider: str, system_prompt: str, user_prompt: str) ->
                         },
                     )
 
-            print(f"  -> Status: {resp.status_code} | Body: {resp.text[:200].replace(chr(10), ' ')}")
+            _console_print(f"  -> Status: {resp.status_code}")
 
             if resp.status_code == 200:
                 data = resp.json()
@@ -1180,13 +1189,13 @@ async def _call_provider(provider: str, system_prompt: str, user_prompt: str) ->
                     last_error = f"Model {model} returned an empty response"
                     continue
                 if finish_reason in ("MAX_TOKENS", "LENGTH", "length", "max_tokens"):
-                    print(f"  ⚠️ Response hit the token limit with {model}")
+                    _console_print(f"  ⚠️ Response hit the token limit with {model}")
                 set_config(f"{provider}_model_index", "0")
-                print(f"  ✅ SUCCESS with {model}")
+                _console_print(f"  ✅ SUCCESS with {model}")
                 return content
 
             if resp.status_code in (401, 403):
-                print("  ❌ Authentication error")
+                _console_print("  ❌ Authentication error")
                 return f"❌ {pconfig['label']} authentication error ({resp.status_code}). Check your API key."
             if resp.status_code == 402:
                 last_error = f"{model}: requires credits"
@@ -1198,20 +1207,20 @@ async def _call_provider(provider: str, system_prompt: str, user_prompt: str) ->
                 last_error = f"{model}: server error ({resp.status_code})"
             else:
                 last_error = f"{model}: HTTP {resp.status_code} — {resp.text[:120]}"
-            print(f"  ⚠️ {last_error}")
+            _console_print(f"  ⚠️ {last_error}")
 
         except httpx.TimeoutException:
             last_error = f"{model}: timed out"
-            print(f"  ⚠️ {last_error}")
+            _console_print(f"  ⚠️ {last_error}")
         except Exception as e:
             last_error = f"{model}: {str(e)[:120]}"
-            print(f"  ❌ {last_error}")
+            _console_print(f"  ❌ {last_error}")
 
     if max_tries == 1:
         msg = f"⚠️ {pconfig['label']} model unavailable. {last_error}. Try another model or provider."
     else:
         msg = f"⚠️ All {max_tries} {pconfig['label']} models failed. Last error: {last_error}."
-    print(f"  ❌ {msg}")
+    _console_print(f"  ❌ {msg}")
     return msg
 
 
@@ -1240,7 +1249,7 @@ async def call_llm(system_prompt: str, user_prompt: str) -> str:
     for other in PROVIDER_CONFIG:
         if other == provider or not _provider_has_key(other):
             continue
-        print(f"↪ Cross-provider failover: {provider} -> {other}")
+        _console_print(f"↪ Cross-provider failover: {provider} -> {other}")
         result = await _call_provider(other, system_prompt, user_prompt)
         if not result.startswith(("⚠️", "❌")):
             set_config("active_provider", other)
@@ -2965,7 +2974,7 @@ def _create_task_from_chat(spec: dict, actor: str) -> Optional[dict]:
     try:
         created = db_retry(_do)
     except Exception as e:
-        print("chat task creation failed:", e)
+        _console_print("chat task creation failed:", e)
         return None
     if created:
         # Log only after the write transaction is committed and closed.
@@ -5017,13 +5026,13 @@ async def test_and_list_models(payload: TestKeyIn):
         return {"ok": False, "provider": provider, "available_models": [], "message": "Enter an API key first."}
 
     pconfig = PROVIDER_CONFIG[provider]
-    print(f"\n{'='*60}\nTESTING {provider} ({pconfig['label']})\n{'='*60}")
+    _console_print(f"\n{'='*60}\nTESTING {provider} ({pconfig['label']})\n{'='*60}")
 
     status, raw_models, list_error = await _fetch_provider_models(provider, api_key)
 
     if status in (401, 403):
         msg = "Invalid API key. Check the key and try again."
-        print("  ❌ " + msg)
+        _console_print("  ❌ " + msg)
         return {"ok": False, "provider": provider, "available_models": [], "message": msg}
 
     chat_models = _filter_chat_models(raw_models)
@@ -5052,7 +5061,7 @@ async def test_and_list_models(payload: TestKeyIn):
                        "Use a provider/key that includes a chat model.")
             else:
                 msg = f"Could not use this key. {test_error or list_error}"
-            print("  ❌ " + msg)
+            _console_print("  ❌ " + msg)
             return {"ok": False, "provider": provider, "available_models": [], "message": msg}
 
     # Put the models most likely to work at the top of the list.
@@ -5099,7 +5108,7 @@ async def test_and_list_models(payload: TestKeyIn):
         msg = (f"API key valid. Found {len(chat_models)} chat model(s), but none of the first models responded "
                f"({test_error or 'no response'}). You can still pick one below.")
 
-    print(f"  ✅ {msg}")
+    _console_print(f"  ✅ {msg}")
     return {
         "ok": True,
         "message": msg,
@@ -6320,7 +6329,7 @@ async def agent_engine() -> None:
             await _maybe_weekly_report()
             _sync_conversation_json()
         except Exception as e:
-            print("Agent engine error:", e)
+            _console_print("Agent engine error:", e)
 
 
 def _extract_team_handoffs(output: str) -> list[tuple[str, str]]:
@@ -7245,7 +7254,7 @@ async def _agent_schedule_loop() -> None:
             if _local_profile_is_complete():
                 _enqueue_due_agent_schedules()
         except Exception as exc:
-            print(f"Agent schedule loop error: {exc}")
+            _console_print(f"Agent schedule loop error: {exc}")
         await asyncio.sleep(5)
 
 
@@ -8263,7 +8272,7 @@ async def _maybe_weekly_report() -> None:
         generate_weekly_report()
         log_activity("CEO", "auto_weekly_report", f"Auto-generated Friday report for week {week_start}")
     except Exception as e:
-        print("Weekly report auto-generation failed:", e)
+        _console_print("Weekly report auto-generation failed:", e)
 
 
 if __name__ == "__main__":

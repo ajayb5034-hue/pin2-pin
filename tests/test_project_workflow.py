@@ -2894,6 +2894,21 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertEqual(main.PROVIDER_CONFIG["codex"]["format"], "openai_responses")
         self.assertIn("nousresearch/hermes-4-405b", main.PROVIDER_MODELS["openrouter"])
 
+    def test_console_output_is_safe_for_legacy_windows_encodings(self):
+        class Cp1252Stream:
+            encoding = "cp1252"
+
+            def __init__(self):
+                self.value = ""
+
+            def write(self, text):
+                self.value += text.encode(self.encoding).decode(self.encoding)
+
+        stream = Cp1252Stream()
+        with mock.patch.object(main.sys, "stdout", stream):
+            main._console_print("model ✅")
+        self.assertEqual(stream.value, r"model \u2705" + "\n")
+
     def test_anthropic_and_codex_responses_are_parsed(self):
         class FakeResponse:
             status_code = 200
