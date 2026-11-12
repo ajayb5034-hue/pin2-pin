@@ -28,17 +28,22 @@ class ProjectWorkflowTests(unittest.TestCase):
             os.environ.pop(key, None)
         self.original_db_path = main.DB_PATH
         self.original_files_dir = main.FILES_DIR
+        self.original_credentials_dir = main.CREDENTIALS_DIR
         self.original_conversations_dir = main.CONVERSATIONS_DIR
         self.original_daily_learning_path = main.DAILY_LEARNING_PATH
         self.original_team_memory_path = main.TEAM_MEMORY_PATH
         self.original_dotenv_path = main.DOTENV_PATH
+        self.original_extra_allowed_hosts = os.environ.get("PIN2PIN_EXTRA_ALLOWED_HOSTS")
         main.DB_PATH = os.path.join(self.temp_dir.name, "team.db")
         main.FILES_DIR = os.path.join(self.temp_dir.name, "files")
+        main.CREDENTIALS_DIR = os.path.join(self.temp_dir.name, "credentials")
         main.CONVERSATIONS_DIR = os.path.join(self.temp_dir.name, "conversations")
         main.DAILY_LEARNING_PATH = os.path.join(self.temp_dir.name, "daily_learning.md")
         main.TEAM_MEMORY_PATH = os.path.join(self.temp_dir.name, "agents.md")
         main.DOTENV_PATH = os.path.join(self.temp_dir.name, ".env")
+        os.environ["PIN2PIN_EXTRA_ALLOWED_HOSTS"] = "testserver"
         os.makedirs(main.FILES_DIR, exist_ok=True)
+        os.makedirs(main.CREDENTIALS_DIR, exist_ok=True)
         main.init_db()
         self.client = TestClient(main.app)
         self.client.__enter__()
@@ -47,10 +52,15 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.client.__exit__(None, None, None)
         main.DB_PATH = self.original_db_path
         main.FILES_DIR = self.original_files_dir
+        main.CREDENTIALS_DIR = self.original_credentials_dir
         main.CONVERSATIONS_DIR = self.original_conversations_dir
         main.DAILY_LEARNING_PATH = self.original_daily_learning_path
         main.TEAM_MEMORY_PATH = self.original_team_memory_path
         main.DOTENV_PATH = self.original_dotenv_path
+        if self.original_extra_allowed_hosts is None:
+            os.environ.pop("PIN2PIN_EXTRA_ALLOWED_HOSTS", None)
+        else:
+            os.environ["PIN2PIN_EXTRA_ALLOWED_HOSTS"] = self.original_extra_allowed_hosts
         for key in [key for key in os.environ if key.startswith("PREEMPTION_")]:
             os.environ.pop(key, None)
         for key in [key for key in os.environ if key.startswith("EMAIL_")]:
@@ -87,10 +97,13 @@ class ProjectWorkflowTests(unittest.TestCase):
 
     def test_gmail_credentials_are_verified_before_saving_to_ignored_env_file(self):
         credentials = {
-            "sender_address": "traderdesk.pms.software@gmail.com",
+            "sender_address": "pin2pin-test@example.invalid",
             "app_password": "abcd efgh ijkl mnop",
         }
-        with mock.patch.object(main, "_verify_gmail_credentials") as verify:
+        with (
+            mock.patch.object(main, "_is_gmail_address", return_value=True),
+            mock.patch.object(main, "_verify_gmail_credentials") as verify,
+        ):
             response = self.client.post("/api/resources/gmail/connect", json=credentials)
         self.assertEqual(response.status_code, 200)
         verify.assert_called_once_with(credentials["sender_address"], "abcdefghijklmnop")
@@ -98,7 +111,7 @@ class ProjectWorkflowTests(unittest.TestCase):
         with open(main.DOTENV_PATH, encoding="utf-8") as env_file:
             dotenv_text = env_file.read()
         self.assertIn("EMAIL_HOST='smtp.gmail.com'", dotenv_text)
-        self.assertIn("EMAIL_SENDER_ADDRESS='traderdesk.pms.software@gmail.com'", dotenv_text)
+        self.assertIn("EMAIL_SENDER_ADDRESS='pin2pin-test@example.invalid'", dotenv_text)
         self.assertIn("EMAIL_APP_PASSWORD='abcdefghijklmnop'", dotenv_text)
         main.init_db()
         account = next(item for item in self.client.get("/api/accounts").json() if item["platform"] == "gmail")
@@ -106,13 +119,25 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertTrue(account["verified"])
         self.assertNotIn("app_password", json.dumps(account).lower())
 
+    def test_reserved_email_domain_is_rejected_for_gmail_connection(self):
+        response = self.client.post("/api/resources/gmail/connect", json={
+            "sender_address": "pin2pin-test@example.invalid",
+            "app_password": "abcdefghijklmnop",
+        })
+        self.assertEqual(response.status_code, 422)
+        self.assertFalse(os.path.exists(main.DOTENV_PATH))
+        self.assertEqual(self.client.get("/api/accounts").json(), [])
+
     def test_gmail_credentials_are_not_saved_when_provider_verification_fails(self):
-        with mock.patch.object(
-            main, "_verify_gmail_credentials",
-            side_effect=main.HTTPException(status_code=400, detail="Gmail rejected these credentials."),
+        with (
+            mock.patch.object(main, "_is_gmail_address", return_value=True),
+            mock.patch.object(
+                main, "_verify_gmail_credentials",
+                side_effect=main.HTTPException(status_code=400, detail="Gmail rejected these credentials."),
+            ),
         ):
             response = self.client.post("/api/resources/gmail/connect", json={
-                "sender_address": "user@gmail.com",
+                "sender_address": "pin2pin-test@example.invalid",
                 "app_password": "abcd efgh ijkl mnop",
             })
         self.assertEqual(response.status_code, 400)
