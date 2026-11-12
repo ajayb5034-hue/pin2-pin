@@ -1,0 +1,3783 @@
+/* ============ Pin2Pin — Local AI Operations ============ */
+const API = "/api";
+
+const PROVIDER_MODELS = {
+  openrouter: [
+    "meta-llama/llama-3.1-8b-instruct:free",
+    "google/gemma-2-9b-it:free",
+    "mistralai/mistral-7b-instruct:free",
+    "microsoft/phi-3-mini-128k-instruct:free",
+    "deepseek-ai/deepseek-chat:free",
+    "qwen/qwen2-7b-instruct:free",
+    "nousresearch/hermes-4-405b",
+  ],
+  anthropic: ["claude-sonnet-4-5", "claude-3-7-sonnet-latest"],
+  openai: ["gpt-4.1", "gpt-4.1-mini"],
+  xai: ["grok-3", "grok-3-mini"],
+  codex: ["gpt-5-codex"],
+  groq: ["llama-3.1-8b-instant"],
+  gemini: ["gemini-3.5-flash-lite"],
+  mistral: ["mistral-small-latest", "mistral-large-latest", "open-mistral-nemo"],
+  huggingface: ["meta-llama/Llama-3.1-8B-Instruct", "Qwen/Qwen2.5-7B-Instruct"],
+  deepinfra: ["meta-llama/Meta-Llama-3.1-8B-Instruct", "Qwen/Qwen2.5-72B-Instruct"],
+  nvidia: ["meta/llama-3.1-8b-instruct", "meta/llama-3.1-70b-instruct"],
+  together: ["meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo", "Qwen/Qwen2.5-72B-Instruct-Turbo"],
+};
+
+const PROVIDER_CONFIG = {
+  openrouter: { label: "OpenRouter", site: "https://openrouter.ai/keys", mark: "OR" },
+  anthropic: { label: "Claude (Anthropic)", site: "https://console.anthropic.com/settings/keys", mark: "A" },
+  openai: { label: "OpenAI", site: "https://platform.openai.com/api-keys", mark: "AI" },
+  xai: { label: "Grok (xAI)", site: "https://console.x.ai/", mark: "X" },
+  codex: { label: "OpenAI Codex API", site: "https://platform.openai.com/api-keys", mark: "C" },
+  groq: { label: "Groq", site: "https://console.groq.com/keys", mark: "G" },
+  gemini: { label: "Google Gemini", site: "https://aistudio.google.com/app/apikey", mark: "✦" },
+  mistral: { label: "Mistral AI", site: "https://console.mistral.ai/api-keys/", mark: "M" },
+  huggingface: { label: "Hugging Face", site: "https://huggingface.co/settings/tokens", mark: "HF" },
+  deepinfra: { label: "DeepInfra", site: "https://deepinfra.com/dash/api_keys", mark: "DI" },
+  nvidia: { label: "NVIDIA NIM", site: "https://build.nvidia.com/", mark: "N" },
+  together: { label: "Together AI", site: "https://api.together.xyz/settings/api-keys", mark: "T" },
+};
+
+const state = {
+  agents: [],
+  agentSchedules: [],
+  tasks: [],
+  archivedTasks: [],
+  showArchivedTasks: false,
+  messages: [],
+  accounts: [],
+  emails: [],
+  emailInbox: [],
+  googleSheetValues: {},
+  googleAnalyticsReports: {},
+  contentPosts: [],
+  ideas: [],
+  approvals: [],
+  suggestions: [],
+  suggestionStatus: null,
+  activity: [],
+  files: [],
+  weeklyReports: [],
+  config: [],
+  project: { workspace_path: "", codex_available: false, codex_command: "", memory: "" },
+  modelRouter: {
+    provider: "openrouter",
+    provider_label: "OpenRouter",
+    active_model: "",
+    index: 0,
+    total: 0,
+    models: [],
+    has_key: false,
+    selected_model: "",
+  },
+  availableModels: {},
+  lastTest: {},
+  health: null,
+  profile: { dashboard_name: "Pin2Pin", owner_name: "", company_name: "", complete: false },
+  operations: { paused: false, active_tasks: 0, tasks_awaiting_review: 0 },
+  chatReceiver: "CEO",
+  selectedAgentId: null,
+  activeTab: "dashboard",
+  typing: {},
+  busy: {},
+  pollTimer: null,
+  taskProgressTimer: null,
+  reportPlayerTimer: null,
+  reportPlayerIndex: 0,
+  reportPlayerData: null,
+  reportNarrationEnabled: false,
+};
+
+const ROLE_COLOR = {
+  "Chief Executive Officer": "ceo",
+  "Lead Generation": "lead",
+  "Search Engine Optimization": "seo",
+  "Data Scraping": "data",
+  "LinkedIn Data Scraping": "linkedin",
+  "Email Sender & Receiver": "email",
+  "Software Engineering": "engineering",
+};
+
+const TAB_TITLES = {
+  dashboard: "Dashboard",
+  team: "Team",
+  tasks: "Task Board",
+  suggestions: "Team Suggestions",
+  project: "Project Workspace",
+  chat: "Team Chat",
+  resources: "Connected Resources",
+  files: "File Manager",
+  reports: "Weekly Reports",
+  models: "Model Router",
+  config: "Configuration",
+  activity: "Activity Feed",
+};
+
+/* ------------------------------------------------------------------ */
+/* Boot                                                                */
+/* ------------------------------------------------------------------ */
+
+async function init() {
+  const savedView = readLastView();
+  if (savedView && TAB_CONTENT[savedView.tab]) state.activeTab = savedView.tab;
+  await loadAll();
+  renderActiveTab();
+  renderBottomPanel();
+  renderFixedChat();
+  updateLocalClock();
+  window.setInterval(updateLocalClock, 1000);
+  restoreLastView(savedView);
+  setupListeners();
+  checkApprovals();
+  startTaskProgressPolling();
+  // Start with the floating chat minimized so it never covers the dashboard.
+  hideChat();
+}
+
+function updateLocalClock() {
+  const now = new Date();
+  const dateParts = new Intl.DateTimeFormat("en", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  }).formatToParts(now).reduce((parts, item) => {
+    parts[item.type] = item.value;
+    return parts;
+  }, {});
+  const date = `${dateParts.day}-${dateParts.month}-${dateParts.year}`;
+  const time = [now.getHours(), now.getMinutes(), now.getSeconds()]
+    .map((value) => String(value).padStart(2, "0"))
+    .join(":");
+  const text = document.getElementById("localClockText");
+  if (text) text.textContent = `${date}  ${time}`;
+  const hour = document.getElementById("clockHour");
+  const minute = document.getElementById("clockMinute");
+  const second = document.getElementById("clockSecond");
+  if (hour) hour.style.transform = `rotate(${((now.getHours() % 12) + now.getMinutes() / 60) * 30}deg)`;
+  if (minute) minute.style.transform = `rotate(${(now.getMinutes() + now.getSeconds() / 60) * 6}deg)`;
+  if (second) second.style.transform = `rotate(${now.getSeconds() * 6}deg)`;
+}
+
+function renderOperationsPauseControl() {
+  const button = document.getElementById("btnPauseWork");
+  if (!button) return;
+  button.textContent = state.operations.paused ? "▶ Resume work" : "⏸ Pause work";
+  button.setAttribute("aria-pressed", String(Boolean(state.operations.paused)));
+  button.classList.toggle("btn-warning", Boolean(state.operations.paused));
+  button.title = state.operations.paused
+    ? "Resume worker tasks and CEO reviews"
+    : "Pause new worker tasks, CEO reviews, and idle research";
+}
+
+async function loadAll() {
+  const [agents, agentSchedules, tasks, messages, accounts, emails, contentPosts, ideas, approvals, suggestions, suggestionStatus, activity, files, reports, router, configRes, health, project, operations, profile] =
+    await Promise.allSettled([
+      fetchJson("/api/agents"),
+      fetchJson("/api/agent-schedules"),
+      fetchJson("/api/tasks"),
+      fetchJson("/api/messages"),
+      fetchJson("/api/accounts"),
+      fetchJson("/api/emails"),
+      fetchJson("/api/content-posts"),
+      fetchJson("/api/ideas"),
+      fetchJson("/api/approvals/pending"),
+      fetchJson("/api/suggestions"),
+      fetchJson("/api/suggestions/status"),
+      fetchJson("/api/activity?limit=60"),
+      fetchJson("/api/files"),
+      fetchJson("/api/weekly-reports"),
+      fetchJson("/api/model-router"),
+      fetchJson("/api/config"),
+      fetchJson("/api/health"),
+      fetchJson("/api/project/settings"),
+      fetchJson("/api/operations/status"),
+      fetchJson("/api/profile"),
+    ]);
+
+  const val = (p, fallback) => (p.status === "fulfilled" ? p.value : fallback);
+  state.agents = val(agents, []) || [];
+  state.agentSchedules = val(agentSchedules, []) || [];
+  state.tasks = val(tasks, []) || [];
+  state.messages = val(messages, []) || [];
+  state.accounts = val(accounts, []) || [];
+  state.emails = val(emails, []) || [];
+  state.contentPosts = val(contentPosts, []) || [];
+  state.ideas = val(ideas, []) || [];
+  state.approvals = val(approvals, []) || [];
+  state.suggestions = val(suggestions, []) || [];
+  state.suggestionStatus = val(suggestionStatus, null);
+  state.activity = val(activity, []) || [];
+  state.files = val(files, []) || [];
+  state.weeklyReports = val(reports, []) || [];
+  state.config = val(configRes, []) || [];
+  if (router.status === "fulfilled" && router.value) state.modelRouter = router.value;
+  if (health.status === "fulfilled" && health.value) state.health = health.value;
+  if (project.status === "fulfilled" && project.value) state.project = project.value;
+  if (operations.status === "fulfilled" && operations.value) state.operations = operations.value;
+  if (profile.status === "fulfilled" && profile.value) state.profile = profile.value;
+  const ownerName = document.getElementById("ownerNameLabel");
+  if (ownerName) ownerName.textContent = state.profile.owner_name || "Set up profile";
+  const ownerInitial = document.getElementById("ownerAvatarLabel");
+  if (ownerInitial) ownerInitial.textContent = (state.profile.owner_name || "P").trim().charAt(0).toUpperCase();
+  const companyName = document.getElementById("companyNameLabel");
+  if (companyName) companyName.textContent = state.profile.company_name || "Your company";
+  renderOperationsPauseControl();
+
+  // Hydrate discovered model lists persisted by the backend.
+  Object.keys(PROVIDER_CONFIG).forEach((p) => {
+    const row = state.config.find((c) => c.key === `${p}_available_models`);
+    if (row && row.value) {
+      try {
+        const list = JSON.parse(row.value);
+        if (Array.isArray(list) && list.length) state.availableModels[p] = list;
+      } catch (e) {
+        /* ignore malformed list */
+      }
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+async function fetchJson(path, opts = {}) {
+  const isForm = typeof FormData !== "undefined" && opts.body instanceof FormData;
+  const headers = {};
+  if (opts.body && !isForm) headers["Content-Type"] = "application/json";
+
+  const res = await fetch(path, {
+    method: opts.method || "GET",
+    headers,
+    body: opts.body ? (isForm ? opts.body : JSON.stringify(opts.body)) : undefined,
+  });
+
+  let data = null;
+  try {
+    data = await res.json();
+  } catch (e) {
+    data = null;
+  }
+
+  if (!res.ok) {
+    const detail = data && data.detail ? data.detail : `request failed (${res.status})`;
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  return data;
+}
+
+function esc(s) {
+  if (s == null) return "";
+  const div = document.createElement("div");
+  div.textContent = String(s);
+  return div.innerHTML;
+}
+
+function formatBytes(n) {
+  const size = Number(n) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function cfgRow(key) {
+  return (state.config || []).find((c) => c.key === key) || null;
+}
+
+function cfgVal(key, fallback = "") {
+  const row = cfgRow(key);
+  return row ? row.value : fallback;
+}
+
+function cfgHas(key) {
+  const row = cfgRow(key);
+  if (!row) return false;
+  if (typeof row.has_value === "boolean") return row.has_value;
+  return !!row.value;
+}
+
+function statusLabel(status) {
+  return {
+    backlog: "Backlog",
+    assigned: "To Do",
+    in_progress: "In Progress",
+    waiting_engineering: "Waiting for Engineering",
+    review: "Review",
+    done: "Done",
+    rejected: "Rejected",
+    blocked: "Blocked",
+  }[status] || status;
+}
+
+function agentShortName(role) {
+  return {
+    "Chief Executive Officer": "CEO",
+    "Lead Generation": "Lead Gen",
+    "Search Engine Optimization": "SEO",
+    "Data Scraping": "Data Scrapper",
+    "LinkedIn Data Scraping": "LinkedIn",
+    "Email Sender & Receiver": "Email",
+    "Software Engineering": "Engineering",
+    "Content Creation": "Content",
+  }[role] || role;
+}
+
+function agentIcon(role) {
+  const agent = typeof role === "object" && role ? role : null;
+  const roleName = agent ? agent.role : role;
+  if (agent?.display_icon) return esc(agent.display_icon);
+  return {
+    "Chief Executive Officer": "🧠",
+    "Lead Generation": "🎯",
+    "Search Engine Optimization": "🔍",
+    "Data Scraping": "📥",
+    "LinkedIn Data Scraping": "💼",
+    "Email Sender & Receiver": "✉️",
+    "Software Engineering": "🛠️",
+    "Content Creation": "✍️",
+  }[roleName] || "🤖";
+}
+
+function providerLabel(key) {
+  if (key === "web_search") return "Web Research";
+  return PROVIDER_CONFIG[key] ? PROVIDER_CONFIG[key].label : key;
+}
+
+function availableModelsFor(provider) {
+  if (state.availableModels[provider] && state.availableModels[provider].length) {
+    return state.availableModels[provider];
+  }
+  const row = cfgRow(`${provider}_available_models`);
+  if (row && row.value) {
+    try {
+      const list = JSON.parse(row.value);
+      if (Array.isArray(list) && list.length) return list;
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  return PROVIDER_MODELS[provider] || [];
+}
+
+function notify(message, type = "info") {
+  let box = document.getElementById("appToast");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "appToast";
+    box.className = "app-toast";
+    document.body.appendChild(box);
+  }
+  box.textContent = message;
+  box.className = `app-toast show toast-${type}`;
+  clearTimeout(box._hideTimer);
+  box._hideTimer = setTimeout(() => {
+    box.className = "app-toast";
+  }, 5000);
+}
+
+// Download without navigating away from the dashboard.
+function triggerDownload(url) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 500);
+}
+
+/* ------------------------------------------------------------------ */
+/* Preserve forms while polling re-renders                             */
+/* ------------------------------------------------------------------ */
+
+function captureUI() {
+  const active = document.activeElement;
+  const focusId = active && active.id ? active.id : null;
+  let selStart = null;
+  let selEnd = null;
+  if (focusId && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+    try {
+      selStart = active.selectionStart;
+      selEnd = active.selectionEnd;
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  const values = {};
+  document.querySelectorAll("#content input[id], #content textarea[id], #content select[id]").forEach((el) => {
+    if (el.type !== "file") values[el.id] = el.value;
+  });
+
+  const scroll = {};
+  document.querySelectorAll("#content [data-scroll-key]").forEach((el) => {
+    scroll[el.dataset.scrollKey] = el.scrollTop;
+  });
+  const pageContent = document.querySelector(".page-content");
+  const chatList = document.getElementById("msgList");
+  const fixedChatList = document.getElementById("chatMessages");
+
+  // Keep the "assign a new task" panel open and any expanded outputs expanded.
+  const createPanel = document.querySelector("#content .create-task-panel");
+  const openOutputs = [...document.querySelectorAll("#content .task-output[open]")]
+    .map((d) => d.closest("[data-task-id]")?.getAttribute("data-task-id"))
+    .filter(Boolean);
+  const taskDetailsId = document.querySelector("#taskDetailsOverlay h2[data-task-id]")?.dataset.taskId || "";
+
+  return {
+    focusId,
+    selStart,
+    selEnd,
+    pageScrollTop: pageContent ? pageContent.scrollTop : 0,
+    chatScroll: chatList ? {
+      top: chatList.scrollTop,
+      nearBottom: chatList.scrollHeight - chatList.scrollTop - chatList.clientHeight < 80,
+    } : null,
+    fixedChatScroll: fixedChatList ? {
+      top: fixedChatList.scrollTop,
+      nearBottom: fixedChatList.scrollHeight - fixedChatList.scrollTop - fixedChatList.clientHeight < 80,
+    } : null,
+    values,
+    scroll,
+    createPanelOpen: !!(createPanel && createPanel.open),
+    openOutputs,
+    taskDetailsId,
+  };
+}
+
+function restoreUI(snap) {
+  if (!snap) return;
+  Object.entries(snap.values || {}).forEach(([id, value]) => {
+    const el = document.getElementById(id);
+    if (el && el.type !== "file" && value != null) el.value = value;
+  });
+  Object.entries(snap.scroll || {}).forEach(([key, top]) => {
+    const el = document.querySelector(`#content [data-scroll-key="${CSS.escape(key)}"]`);
+    if (el) el.scrollTop = top;
+  });
+
+  const createPanel = document.querySelector("#content .create-task-panel");
+  if (createPanel && snap.createPanelOpen) createPanel.open = true;
+  (snap.openOutputs || []).forEach((id) => {
+    const card = document.querySelector(`#content [data-task-id="${id}"]`);
+    const details = card && card.querySelector(".task-output");
+    if (details) details.open = true;
+  });
+  if (snap.taskDetailsId && state.tasks.some((task) => task.id === snap.taskDetailsId)) {
+    openTaskDetails(snap.taskDetailsId);
+  }
+  const pageContent = document.querySelector(".page-content");
+  if (pageContent) pageContent.scrollTop = snap.pageScrollTop || 0;
+  const chatList = document.getElementById("msgList");
+  if (chatList && snap.chatScroll) {
+    chatList.scrollTop = snap.chatScroll.nearBottom
+      ? chatList.scrollHeight
+      : Math.min(snap.chatScroll.top, chatList.scrollHeight - chatList.clientHeight);
+  }
+  const fixedChatList = document.getElementById("chatMessages");
+  if (fixedChatList && snap.fixedChatScroll) {
+    fixedChatList.scrollTop = snap.fixedChatScroll.nearBottom
+      ? fixedChatList.scrollHeight
+      : Math.min(snap.fixedChatScroll.top, fixedChatList.scrollHeight - fixedChatList.clientHeight);
+  }
+
+  if (snap.focusId) {
+    const el = document.getElementById(snap.focusId);
+    if (el) {
+      try {
+        el.focus({ preventScroll: true });
+        if (snap.selStart != null) el.setSelectionRange(snap.selStart, snap.selEnd);
+      } catch (e) {
+        /* ignore */
+      }
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Tabs / shell                                                        */
+/* ------------------------------------------------------------------ */
+
+const TAB_CONTENT = {
+  dashboard: renderDashboard,
+  team: renderTeam,
+  tasks: renderTasksBoard,
+  suggestions: renderSuggestions,
+  project: renderProject,
+  chat: renderChatTab,
+  resources: renderResources,
+  files: renderFiles,
+  reports: renderReports,
+  models: renderModels,
+  config: renderConfig,
+  activity: renderActivity,
+};
+
+const LAST_VIEW_KEY = "preemption-ai-team:last-view";
+
+function readLastView() {
+  try {
+    const saved = sessionStorage.getItem(LAST_VIEW_KEY);
+    return saved ? JSON.parse(saved) : null;
+  } catch (error) {
+    console.warn("Could not restore the last dashboard view:", error.message);
+    return null;
+  }
+}
+
+function saveLastView() {
+  const pageContent = document.querySelector(".page-content");
+  const openTask = document.querySelector("#taskDetailsOverlay h2[data-task-id]");
+  const openOutputs = [...document.querySelectorAll("#content .task-output[open]")]
+    .map((details) => details.dataset.outputTask)
+    .filter(Boolean);
+  const outputScroll = {};
+  document.querySelectorAll("#content [data-scroll-key]").forEach((element) => {
+    outputScroll[element.dataset.scrollKey] = element.scrollTop;
+  });
+  try {
+    sessionStorage.setItem(LAST_VIEW_KEY, JSON.stringify({
+      tab: state.activeTab,
+      pageScrollTop: pageContent ? pageContent.scrollTop : 0,
+      taskId: openTask ? openTask.dataset.taskId : "",
+      openOutputs,
+      outputScroll,
+    }));
+  } catch (error) {
+    console.warn("Could not save the dashboard view:", error.message);
+  }
+}
+
+function restoreLastView(saved) {
+  if (!saved) return;
+  (saved.openOutputs || []).forEach((taskId) => {
+    const details = [...document.querySelectorAll("#content .task-output")]
+      .find((item) => item.dataset.outputTask === taskId);
+    if (details) details.open = true;
+  });
+  Object.entries(saved.outputScroll || {}).forEach(([key, top]) => {
+    const element = [...document.querySelectorAll("#content [data-scroll-key]")]
+      .find((item) => item.dataset.scrollKey === key);
+    if (element) element.scrollTop = Number(top) || 0;
+  });
+  const pageContent = document.querySelector(".page-content");
+  if (pageContent) pageContent.scrollTop = Number(saved.pageScrollTop) || 0;
+  if (saved.taskId && state.tasks.some((task) => task.id === saved.taskId)) {
+    openTaskDetails(saved.taskId);
+  }
+}
+
+function renderActiveTab(preserve = false) {
+  try {
+    const content = document.getElementById("content");
+    if (!content) return;
+    if (!state.profile.complete) {
+      renderOnboarding();
+      return;
+    }
+    const snap = preserve ? captureUI() : null;
+    const tab = state.activeTab || "dashboard";
+    const titleEl = document.getElementById("pageTitle");
+    if (titleEl) titleEl.textContent = TAB_TITLES[tab] || tab;
+
+    content.innerHTML = "";
+    const fn = TAB_CONTENT[tab];
+    if (fn) fn();
+    else content.innerHTML = `<div class="empty">Tab "${esc(tab)}" not implemented.</div>`;
+
+    highlightNav(tab);
+    if (preserve) restoreUI(snap);
+  } catch (e) {
+    console.error("renderActiveTab error:", e);
+    const content = document.getElementById("content");
+    if (content) {
+      content.innerHTML = `<div class="empty" style="padding:20px;color:var(--danger);">Error rendering tab: ${esc(e.message)}</div>`;
+    }
+  }
+}
+
+function renderOnboarding() {
+  const titleEl = document.getElementById("pageTitle");
+  if (titleEl) titleEl.textContent = "Welcome to Pin2Pin";
+  const content = document.getElementById("content");
+  if (!content) return;
+  content.innerHTML = `
+    <section class="onboarding-shell">
+      <div class="onboarding-card">
+        <div class="eyebrow">YOUR LOCAL WORKSPACE</div>
+        <h2>Set up your company</h2>
+        <p>Pin2Pin runs locally on this computer. Your profile, tasks, files, and credentials stay in this installation.</p>
+        <form id="onboardingForm">
+          <label>Your name<input name="owner_name" maxlength="100" required autocomplete="name" value="${esc(state.profile.owner_name || "")}"></label>
+          <label>Company name<input name="company_name" maxlength="100" required value="${esc(state.profile.company_name || "")}"></label>
+          <label>What does your company do?<textarea name="company_description" maxlength="1200" rows="4" placeholder="Optional, but it helps agents give relevant answers. Avoid confidential details.">${esc(state.profile.company_description || "")}</textarea></label>
+          <label>Company website<input name="company_website" type="url" maxlength="500" placeholder="https://example.com" value="${esc(state.profile.company_website || "")}"></label>
+          <button class="btn btn-primary" type="submit">Save profile and continue</button>
+          <div class="onboarding-error" id="onboardingError" role="alert"></div>
+        </form>
+      </div>
+    </section>
+  `;
+  const form = document.getElementById("onboardingForm");
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    try {
+      state.profile = await fetchJson("/api/profile", {
+        method: "POST",
+        body: Object.fromEntries(data.entries()),
+      });
+      await loadAll();
+      renderActiveTab(false);
+      renderBottomPanel();
+      notify("Profile saved on this computer", "success");
+    } catch (error) {
+      const errorBox = document.getElementById("onboardingError");
+      if (errorBox) errorBox.textContent = error.message;
+    }
+  });
+}
+
+function highlightNav(tab) {
+  document.querySelectorAll(".nav-item").forEach((el) => {
+    el.classList.toggle("active", el.dataset.tab === tab);
+  });
+}
+
+function goToTab(tab) {
+  if (!TAB_CONTENT[tab]) return;
+  state.activeTab = tab;
+  renderActiveTab(false);
+  saveLastView();
+}
+
+/* ------------------------------------------------------------------ */
+/* Bottom live panel                                                   */
+/* ------------------------------------------------------------------ */
+
+function renderBottomPanel() {
+  const strip = document.getElementById("agentStrip");
+  const feed = document.getElementById("logFeed");
+  if (!strip || !feed) return;
+
+  strip.innerHTML = state.agents.map((a) => {
+    let cls = "idle";
+    let dot = "dot-idle";
+    let taskTxt = "Idle";
+    if (a.status === "working") {
+      cls = "working";
+      dot = "dot-working";
+      taskTxt = "Working on task";
+    } else if (a.status === "assigned") {
+      taskTxt = "Assigned — waiting";
+    }
+    const cur = a.current_task_id ? state.tasks.find((t) => t.id === a.current_task_id) : null;
+    if (cur) taskTxt = cur.title;
+    return `
+      <div class="agent-status-item ${cls}">
+        <div class="item-name">${esc(agentShortName(a.role))} <span class="item-dot ${dot}"></span></div>
+        <div class="item-role">${esc(a.role)}</div>
+        <div class="item-task">${esc(taskTxt)}</div>
+      </div>`;
+  }).join("");
+
+  feed.innerHTML = state.activity.slice(0, 12).map((a) => `
+    <div class="log-item">
+      <div class="actor">${esc(a.actor)}</div>
+      <div class="action">${esc(a.action)}</div>
+      ${a.detail ? `<div class="detail">${esc(a.detail)}</div>` : ""}
+      <div class="time">${new Date(a.timestamp).toLocaleTimeString()}</div>
+    </div>`).join("") || "<div class='empty'>No activity yet.</div>";
+
+  const btn = document.getElementById("btnBottomCollapse");
+  if (btn && !btn.dataset.wired) {
+    btn.dataset.wired = "1";
+    btn.addEventListener("click", () => {
+      const container = document.getElementById("bottomPanelContainer");
+      if (!container) return;
+      container.classList.toggle("collapsed");
+      btn.textContent = container.classList.contains("collapsed") ? "▼" : "▲";
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Dashboard                                                           */
+/* ------------------------------------------------------------------ */
+
+function renderDashboard() {
+  const byStatus = {};
+  state.tasks.forEach((t) => {
+    byStatus[t.status] = (byStatus[t.status] || 0) + 1;
+  });
+  const working = state.agents.filter((a) => a.status === "working").length;
+  const pending = state.approvals.filter((a) => a.status === "pending").length;
+  const active = state.tasks.filter((t) => ["assigned", "in_progress", "waiting_engineering"].includes(t.status)).length;
+  const done = byStatus.done || 0;
+  const blocked = byStatus.blocked || 0;
+  const completion = state.tasks.length ? Math.round((done / state.tasks.length) * 100) : 0;
+  const connectedResources = state.accounts.filter((a) => a.status === "connected").length;
+  const suggestions = (state.suggestions || []).filter((item) => item.status === "open");
+  const recentActiveTasks = state.tasks
+    .filter((task) => ["assigned", "in_progress", "waiting_engineering", "review", "blocked"].includes(task.status))
+    .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
+    .slice(0, 6);
+  const recentDoneTasks = state.tasks
+    .filter((task) => task.status === "done")
+    .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
+    .slice(0, 5);
+  const hasKey =
+    (state.health && state.health.has_any_key) ||
+    (state.modelRouter && state.modelRouter.has_key);
+
+  document.getElementById("content").innerHTML = `
+    <section class="dashboard-hero">
+      <div>
+        <div class="eyebrow">AGENT OPERATIONS</div>
+        <h2>Your team, in motion.</h2>
+        <p>Work is routed to specialists, changes are tracked, and you stay in control of every external action.</p>
+        <div class="hero-actions">
+          <button class="btn btn-primary" data-goto="tasks">＋ Create a task</button>
+          <button class="btn btn-ghost" data-goto="team">Meet your team</button>
+        </div>
+      </div>
+      <div class="hero-orbit" aria-hidden="true"><div class="orbit-ring"></div><div class="orbit-core">✳</div><span class="orbit-node node-one">AI</span><span class="orbit-node node-two">↗</span><span class="orbit-node node-three">✓</span></div>
+      <div class="hero-status"><span class="live-pulse"></span>${working ? `${working} agent${working === 1 ? "" : "s"} working` : active ? `${active} task${active === 1 ? "" : "s"} in motion` : "Ready for the next task"}</div>
+    </section>
+
+    ${hasKey ? "" : `<div class="notice-card"><div><b>AI provider not configured</b><div class="config-hint">Add a model key to activate research and content agents. Project coding uses its own local runtime.</div></div><button class="btn btn-primary" data-goto="config">Configure AI</button></div>`}
+    ${blocked ? `<div class="notice-card warning-notice"><div><b>${blocked} blocked task${blocked === 1 ? "" : "s"}</b><div class="config-hint">See each task for the blocker and retry once it is fixed.</div></div><button class="btn btn-outline" data-goto="tasks">Review tasks</button></div>` : ""}
+
+    <div class="metric-grid">
+      <article class="metric-card"><div class="metric-top"><span>In motion</span><span class="metric-icon icon-violet">↗</span></div><strong>${active}</strong><div class="metric-foot"><span class="live-pulse"></span>${working} agents active</div></article>
+      <article class="metric-card"><div class="metric-top"><span>Completed</span><span class="metric-icon icon-green">✓</span></div><strong>${done}</strong><div class="metric-foot">${completion}% of all tasks</div><div class="mini-progress"><i style="width:${completion}%"></i></div></article>
+      <article class="metric-card"><div class="metric-top"><span>Needs your review</span><span class="metric-icon icon-amber">!</span></div><strong>${pending}</strong><div class="metric-foot">${pending ? "External actions stay gated" : "No approvals waiting"}</div></article>
+      <article class="metric-card"><div class="metric-top"><span>Connected resources</span><span class="metric-icon icon-blue">⌁</span></div><strong>${connectedResources}</strong><div class="metric-foot">${state.files.length} shared files</div></article>
+    </div>
+
+    <section class="surface-panel dashboard-task-panel">
+      <div class="panel-heading"><div><div class="eyebrow">TASKS IN MOTION</div><h3>Open work</h3></div><button class="text-action" data-goto="tasks">All statuses →</button></div>
+      <div class="dashboard-task-list">${recentActiveTasks.map((task) => {
+        const owner = state.agents.find((agent) => agent.id === task.assigned_agent_id);
+        return `<button class="dashboard-task-row" data-open-task="${esc(task.id)}">
+          <span class="dashboard-task-status status-${esc(task.status)}">${esc(statusLabel(task.status))}</span>
+          <span class="dashboard-task-title"><b>${esc(task.title)}</b><small>${esc(owner ? owner.name : "Unassigned")} · ${new Date(task.updated_at).toLocaleString()}</small>${task.progress_summary ? `<small class="dashboard-task-progress" data-task-progress-summary="${esc(task.id)}">${esc(task.progress_summary)}${task.status === "in_progress" && task.estimated_remaining_seconds != null ? ` · ~${esc(formatTaskDuration(task.estimated_remaining_seconds))} left` : ""}</small>` : ""}</span>
+          <span class="dashboard-task-chevron">↗</span>
+        </button>`;
+      }).join("") || `<div class="empty-state">No open tasks. New assignments will appear here.</div>`}</div>
+    </section>
+
+    <section class="surface-panel dashboard-task-panel">
+      <div class="panel-heading"><div><div class="eyebrow">RECENT DELIVERIES</div><h3>Latest 5 completed tasks</h3></div><button class="text-action" data-goto="files">All team files →</button></div>
+      <div class="dashboard-task-list">${recentDoneTasks.map((task) => {
+        const owner = state.agents.find((agent) => agent.id === task.assigned_agent_id);
+        return `<button class="dashboard-task-row" data-open-task="${esc(task.id)}">
+          <span class="dashboard-task-status status-done">Done</span>
+          <span class="dashboard-task-title"><b>${esc(task.title)}</b><small>${esc(owner ? owner.name : "Team")} · ${new Date(task.updated_at).toLocaleString()}</small></span>
+          <span class="dashboard-task-chevron">↗</span>
+        </button>`;
+      }).join("") || `<div class="empty-state">Completed task outputs will be listed here.</div>`}</div>
+    </section>
+
+    <div class="dashboard-grid">
+      <section class="surface-panel workload-panel">
+        <div class="panel-heading"><div><div class="eyebrow">WORKLOAD</div><h3>Task pipeline</h3></div><button class="text-action" data-goto="tasks">View board →</button></div>
+        <div class="pipeline-chart" role="img" aria-label="Task status distribution">
+          ${[
+            ["Backlog", "backlog", "#a9b5cb"], ["To do", "assigned", "#8092ff"],
+            ["In progress", "in_progress", "#8d72f7"],
+            ["Waiting for Engineering", "waiting_engineering", "#3b82f6"],
+            ["Review", "review", "#f0ac51"],
+            ["Done", "done", "#45b993"], ["Rejected", "rejected", "#a9b5cb"],
+            ["Blocked", "blocked", "#e27668"],
+          ].map(([label, key, color]) => {
+            const count = byStatus[key] || 0;
+            const ratio = state.tasks.length ? Math.max(count ? 5 : 0, count / state.tasks.length * 100) : 0;
+            return `<div class="pipeline-row"><div class="pipeline-label"><span><i style="--bar:${color}"></i>${label}</span><b>${count}</b></div><div class="pipeline-track"><i style="--bar:${color};width:${ratio}%"></i></div></div>`;
+          }).join("")}
+        </div>
+      </section>
+      <section class="surface-panel team-panel">
+        <div class="panel-heading"><div><div class="eyebrow">THE CREW</div><h3>Agent status</h3></div><button class="text-action" data-goto="team">All agents →</button></div>
+        <div class="team-activity-list">${state.agents.map((a) => {
+          const current = a.current_task_id ? state.tasks.find((t) => t.id === a.current_task_id) : null;
+          return `<div class="team-activity-row"><span class="agent-mini-avatar">${agentIcon(a)}</span><div class="team-activity-copy"><b>${esc(a.name)}</b><span>${esc(current ? current.title : a.role)}</span></div><span class="status-pip status-${esc(a.status)}">${esc(a.status.replace("_", " "))}</span></div>`;
+        }).join("") || `<div class="empty-state">Your agent team will appear here.</div>`}</div>
+      </section>
+      <section class="surface-panel activity-panel">
+        <div class="panel-heading"><div><div class="eyebrow">LIVE FEED</div><h3>Recent activity</h3></div><button class="text-action" data-goto="activity">Open feed →</button></div>
+        <div class="dashboard-feed">${state.activity.slice(0, 6).map(feedItemHtml).join("") || `<div class="empty-state">New work will show up here.</div>`}</div>
+      </section>
+      <section class="surface-panel suggestions-panel">
+        <div class="panel-heading"><div><div class="eyebrow">TEAM THINKING</div><h3>Suggestions</h3></div><button class="text-action" data-goto="suggestions">Explore →</button></div>
+        ${suggestions.slice(0, 2).map((item) => `<article class="suggestion-preview"><span class="suggestion-agent">${agentIcon(state.agents.find((a) => a.id === item.agent_id)?.role || "")} ${esc(item.agent_name || "Team")}</span><b>${esc(item.title)}</b><p>${esc(item.summary)}</p></article>`).join("") || `<div class="empty-state">When the queue is clear, the team will research and share a one-time set of suggestions.</div>`}
+      </section>
+    </div>
+  `;
+}
+
+function renderSuggestions() {
+  const suggestions = state.suggestions || [];
+  const running = suggestions.filter((item) => item.status === "researching").length;
+  const ready = suggestions.filter((item) => item.status === "open");
+  const status = state.suggestionStatus || {};
+  const reasons = status.reasons || [];
+  document.getElementById("content").innerHTML = `
+    <section class="suggestions-hero">
+      <div class="eyebrow">IDLE-TIME RESEARCH</div>
+      <h2>Good ideas, only when work is clear.</h2>
+      <p>When backlog, to-do, in-progress, review, and blocked work are all clear, each specialist checks recent chat and public web sources once. Suggestions stop until new work is created.</p>
+      <div class="suggestion-run-state">${running ? `<span class="live-pulse"></span>${running} specialist${running === 1 ? "" : "s"} researching` : ready.length ? `${ready.length} fresh suggestion${ready.length === 1 ? "" : "s"} to review` : status.can_run ? "Queue clear. Agents are ready to research once." : reasons[0] || "Research cycle complete."}</div>
+      <div class="suggestion-availability">${Number(status.processed_agents || 0)} / ${Number(status.total_agents || 0)} agents attempted this cycle</div>
+      ${reasons.length > 1 ? `<ul class="suggestion-blockers">${reasons.map((reason) => `<li>${esc(reason)}</li>`).join("")}</ul>` : ""}
+      <button class="btn btn-primary btn-sm" id="btnRunSuggestions" ${status.can_run ? "" : "disabled"}>Research now</button>
+    </section>
+    <div class="suggestion-grid">
+      ${suggestions.map((item) => {
+        const agent = state.agents.find((entry) => entry.id === item.agent_id);
+        const sources = Array.isArray(item.source_urls) ? item.source_urls : [];
+        return `<article class="suggestion-card">
+          <div class="suggestion-card-top"><span class="suggestion-agent">${agentIcon(agent ? agent.role : "")} ${esc(item.agent_name)}</span><span class="suggestion-state state-${esc(item.status)}">${esc(item.status.replace("_", " "))}</span></div>
+          <h3>${esc(item.title)}</h3>
+          <p>${esc(item.summary)}</p>
+          ${sources.length ? `<details class="suggestion-sources"><summary>Research sources (${sources.length})</summary><ul>${sources.map((url) => `<li><a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a></li>`).join("")}</ul></details>` : ""}
+          ${item.status === "open" ? `<div class="suggestion-actions"><button class="btn btn-primary btn-sm" data-suggestion-task="${esc(item.id)}">Add as task</button><button class="btn btn-outline btn-sm" data-suggestion-dismiss="${esc(item.id)}">Dismiss</button></div>` : ""}
+        </article>`;
+      }).join("") || `<div class="surface-panel empty-state">No suggestions have been generated yet. The agents will each research once after all queued, active, and review tasks have cleared.</div>`}
+    </div>
+  `;
+  const runButton = document.getElementById("btnRunSuggestions");
+  if (runButton) runButton.addEventListener("click", runSuggestionsNow);
+}
+
+async function runSuggestionsNow() {
+  const button = document.getElementById("btnRunSuggestions");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Researching…";
+  }
+  try {
+    await fetchJson("/api/suggestions/run", { method: "POST", body: {} });
+    await loadAll();
+    renderActiveTab(false);
+    notify("Idle research finished", "success");
+  } catch (e) {
+    notify("Suggestions did not run: " + e.message, "error");
+    await loadAll();
+    renderActiveTab(false);
+  }
+}
+
+function ceoStrategyText() {
+  const company = state.profile.company_name || "your company";
+  const details = state.profile.company_description || "Add your products and services to your profile for grounded company-specific work.";
+  return `Pin2Pin is ready to support ${company}. Company profile: ${details}
+
+No tasks are started automatically. Assign work to the team or create a recurring schedule for a specialist. Tasks run one at a time; external actions remain gated for your approval.
+
+Configure an AI provider in Configuration to activate cloud-based agents.`;
+}
+
+function agentCardHtml(a, clickable = false) {
+  const cls = ROLE_COLOR[a.role] || "";
+  const statusBadge = {
+    idle: '<span class="agent-badge badge-idle">Idle</span>',
+    assigned: '<span class="agent-badge badge-assigned">Assigned</span>',
+    working: '<span class="agent-badge badge-working">Working</span>',
+    done: '<span class="agent-badge badge-done">Done</span>',
+  }[a.status] || '<span class="agent-badge badge-idle">Idle</span>';
+  let caps = [];
+  try {
+    caps = JSON.parse(a.capabilities || "[]");
+  } catch (e) {
+    caps = [];
+  }
+  const cur = a.current_task_id ? state.tasks.find((t) => t.id === a.current_task_id) : null;
+  const dataId = clickable ? ` data-agent-id="${esc(a.id)}"` : "";
+  return `
+    <div class="agent-card ${cls}"${dataId} style="${clickable ? "cursor:pointer" : ""}">
+      <div class="agent-head">
+        <div class="agent-avatar">${agentIcon(a)}</div>
+        <div class="agent-info">
+          <div class="agent-name">${esc(a.name)}</div>
+          <div class="agent-role">${esc(a.role)}</div>
+        </div>
+        ${statusBadge}
+      </div>
+      <div class="agent-caps">${caps.join(", ")}</div>
+      ${cur ? `<div class="agent-current">Now: ${esc(cur.title)}</div>` : ""}
+    </div>
+  `;
+}
+
+function feedItemHtml(a) {
+  return `<div class="feed-item">
+    <div class="actor">${esc(a.actor)}</div>
+    <div class="action">${esc(a.action)}</div>
+    ${a.detail ? `<div class="detail">${esc(a.detail)}</div>` : ""}
+    <div class="time">${new Date(a.timestamp).toLocaleTimeString()}</div>
+  </div>`;
+}
+
+function taskOutputHtml(t) {
+  const out = t.output || "";
+  const mediaFiles = t.media_files || [];
+  const mediaHtml = mediaFiles.length
+    ? `<div class="task-media-assets">${mediaFiles.map((file) => {
+      const source = `/api/files/${encodeURIComponent(file.id)}/preview`;
+      const isVideo = file.mime_type.startsWith("video/");
+      const mediaKind = isVideo ? "video" : "image";
+      const preview = isVideo
+        ? `<video controls preload="metadata" src="${esc(source)}"></video>`
+        : `<img loading="lazy" src="${esc(source)}" alt="${esc(file.name)}">`;
+      return `<figure>${preview}<figcaption><span>${esc(file.name)}</span><div class="task-media-actions">
+        <button class="btn btn-outline btn-sm" data-preview-file="${esc(file.id)}" data-preview-name="${esc(file.name)}" data-preview-mime="${esc(file.mime_type)}">See ${mediaKind}</button>
+        <button class="btn btn-outline btn-sm" data-download-file="${esc(file.id)}">⬇ Download ${mediaKind}</button>
+      </div></figcaption></figure>`;
+    }).join("")}</div>`
+    : "";
+  if (!out) return mediaHtml;
+  const lines = out.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("|") && l.endsWith("|"));
+  let body = "";
+  if (lines.length > 1) {
+    const rows = [];
+    let header = [];
+    for (const l of lines) {
+      const cells = [...l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|")].map((c) => c.trim());
+      const isSep = cells.length > 0 && cells.every((c) => c && /^[-: ]+$/.test(c));
+      if (isSep) continue;
+      if (rows.length === 0) { header = cells; continue; }
+      const row = cells.map((c) => {
+        const m = c.match(/^\[([^\]]*)\]\(([^)]*)\)$/);
+        return m ? m[2] : c;
+      });
+      rows.push(row);
+    }
+    if (header) {
+      body = `<div class="task-table-wrap task-scroll-preserve" data-scroll-key="output-table-${esc(t.id)}"><table class="task-table"><thead><tr>${header.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    }
+  }
+  if (!body) body = `<div class="task-out task-scroll-preserve" data-scroll-key="output-text-${esc(t.id)}">${esc(out)}</div>`;
+  const extension = esc(t.export_extension || "txt");
+  const formatLabel = extension === "csv" ? "CSV" : extension.toUpperCase();
+  return `${mediaHtml}<details class="task-output" data-output-task="${esc(t.id)}"><summary>View output</summary>${body}</details>
+       <button class="btn btn-outline btn-sm" data-export-task="${esc(t.id)}">⬇ Download ${formatLabel}</button>`;
+}
+
+function openTaskMediaPreview(fileId, filename, mimeType) {
+  const content = document.getElementById("content");
+  const existing = document.getElementById("taskMediaPreviewOverlay");
+  if (existing) existing.remove();
+  const source = `/api/files/${encodeURIComponent(fileId)}/preview`;
+  const preview = mimeType.startsWith("video/")
+    ? `<video controls autoplay src="${esc(source)}"></video>`
+    : `<img src="${esc(source)}" alt="${esc(filename)}">`;
+  const overlay = document.createElement("div");
+  overlay.id = "taskMediaPreviewOverlay";
+  overlay.className = "task-media-preview-overlay";
+  overlay.innerHTML = `<section class="task-media-preview-dialog" role="dialog" aria-modal="true" aria-label="${esc(filename)}">
+    <header><span>${esc(filename)}</span><button class="icon-btn" data-close-media-preview aria-label="Close preview">×</button></header>
+    ${preview}
+  </section>`;
+  content.appendChild(overlay);
+  overlay.querySelector("[data-close-media-preview]")?.focus({ preventScroll: true });
+}
+
+function formatTaskDuration(seconds) {
+  const mins = Math.max(1, Math.ceil(Number(seconds || 0) / 60));
+  if (mins < 60) return `${mins} min`;
+  const hours = Math.floor(mins / 60);
+  const remaining = mins % 60;
+  return remaining ? `${hours} hr ${remaining} min` : `${hours} hr`;
+}
+
+function taskEtaText(task) {
+  const eta = task.estimated_remaining_seconds;
+  if (task.status !== "in_progress") return "";
+  if (task.taking_longer_than_estimate) {
+    return `Taking longer than usual (typical run: ${formatTaskDuration(task.estimated_duration_seconds)}).`;
+  }
+  if (eta === null || eta === undefined) return "ETA unavailable";
+  return `About ${formatTaskDuration(eta)} remaining (estimate).`;
+}
+
+function taskProgressHtml(task) {
+  if (!task.progress_summary && !["assigned", "in_progress", "waiting_engineering"].includes(task.status)) return "";
+  const active = task.status === "in_progress";
+  const showTrack = active || ["review", "done", "blocked"].includes(task.status);
+  const percent = active
+    ? Math.max(3, Math.min(99, Number(task.progress_percent || 3)))
+    : Math.max(0, Math.min(100, Number(task.progress_percent || (["review", "done"].includes(task.status) ? 100 : 0))));
+  const etaText = active ? taskEtaText(task) : "";
+  const summary = task.progress_summary
+    || (task.status === "assigned"
+    ? `Queued for ${task.agent_name || "the assigned agent"}; waiting for the worker to start.`
+    : "Waiting for Engineering to return the implementation.");
+  return `<div class="task-live-progress${active ? " is-active" : ""}" data-progress-for="${esc(task.id)}">
+    <div class="task-progress-heading"><b>${active ? "Live progress" : esc(statusLabel(task.status))}</b>${showTrack ? `<span>${percent}%</span>` : ""}</div>
+    ${showTrack ? `<div class="task-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><i style="width:${percent}%"></i></div>` : ""}
+    <p>${esc(summary)}</p>
+    ${etaText ? `<small>${esc(etaText)}</small>` : ""}
+    </div>`;
+}
+
+function updateTaskProgressElement(task, root) {
+  const existing = [...root.querySelectorAll("[data-progress-for]")]
+    .find((element) => element.dataset.progressFor === task.id);
+  const html = taskProgressHtml(task);
+  if (existing) {
+    if (html) existing.outerHTML = html;
+    else existing.remove();
+    return;
+  }
+  if (!html) return;
+  const card = [...root.querySelectorAll(".task-card")]
+    .find((element) => element.dataset.taskId === task.id);
+  const overlay = root.querySelector("#taskDetailsOverlay");
+  const target = card || (overlay && overlay.querySelector(".task-details-dialog"));
+  if (!target) return;
+  const anchor = target.querySelector(".task-output, .task-actions, .task-meta");
+  if (anchor) anchor.insertAdjacentHTML("beforebegin", html);
+  else target.insertAdjacentHTML("beforeend", html);
+}
+
+function updateTaskProgressDom(task, previous) {
+  const root = document.getElementById("content");
+  if (!root) return;
+  const cards = [...root.querySelectorAll(".task-card")]
+    .filter((element) => element.dataset.taskId === task.id);
+  cards.forEach((card) => {
+    updateTaskProgressElement(task, card);
+    if (previous && previous.status !== task.status) {
+      card.dataset.status = task.status;
+      const badge = card.querySelector(".task-agent .tag");
+      if (badge) {
+        badge.className = `tag tag-${task.status}`;
+        badge.textContent = statusLabel(task.status);
+      }
+      if (card.closest(".board")) {
+        const destination = root.querySelector(`[data-board-status="${task.status}"] .board-col-body`);
+        if (destination) destination.appendChild(card);
+        root.querySelectorAll(".board-col").forEach((column) => {
+          const count = column.querySelectorAll(".task-card").length;
+          const label = column.querySelector(".board-col-count");
+          if (label) label.textContent = String(count);
+        });
+      }
+    }
+  });
+  const dashboardRow = [...root.querySelectorAll("[data-open-task]")]
+    .find((element) => element.dataset.openTask === task.id);
+  if (dashboardRow) {
+    if (previous && previous.status !== task.status) {
+      const badge = dashboardRow.querySelector(".dashboard-task-status");
+      if (badge) {
+        badge.className = `dashboard-task-status status-${task.status}`;
+        badge.textContent = statusLabel(task.status);
+      }
+    }
+    let summary = dashboardRow.querySelector("[data-task-progress-summary]");
+    if (task.progress_summary) {
+      const text = `${task.progress_summary}${task.status === "in_progress" && task.estimated_remaining_seconds != null ? ` · ~${formatTaskDuration(task.estimated_remaining_seconds)} left` : ""}`;
+      if (summary) summary.textContent = text;
+      else dashboardRow.querySelector(".dashboard-task-title")?.insertAdjacentHTML(
+        "beforeend",
+        `<small class="dashboard-task-progress" data-task-progress-summary="${esc(task.id)}">${esc(text)}</small>`,
+      );
+    } else if (summary) {
+      summary.remove();
+    }
+  }
+  const overlay = root.querySelector("#taskDetailsOverlay");
+  if (overlay) {
+    const title = overlay.querySelector("#taskDetailsTitle");
+    if (title && title.dataset.taskId === task.id) {
+      const badge = overlay.querySelector(".task-details-meta .tag");
+      if (badge) {
+        badge.className = `tag tag-${task.status}`;
+        badge.textContent = statusLabel(task.status);
+      }
+      updateTaskProgressElement(task, overlay);
+    }
+  }
+}
+
+function startTaskProgressPolling() {
+  if (state.taskProgressTimer) clearInterval(state.taskProgressTimer);
+  state.taskProgressTimer = setInterval(async () => {
+    const trackedStatuses = new Set(["assigned", "in_progress", "waiting_engineering"]);
+    if (!state.tasks.some((task) => trackedStatuses.has(task.status))) return;
+    if (state.busy.taskProgress) return;
+    state.busy.taskProgress = true;
+    try {
+      const latest = await fetchJson("/api/tasks");
+      const previousById = new Map(state.tasks.map((task) => [task.id, task]));
+      const boardNeedsRefresh = latest.some((task) => {
+        const previous = previousById.get(task.id);
+        return previous && (
+          previous.status !== task.status
+          || Boolean(previous.output) !== Boolean(task.output)
+          || previous.needs_approval !== task.needs_approval
+        );
+      });
+      const hasFinishedTask = latest.some((task) => {
+        const previous = previousById.get(task.id);
+        return previous && trackedStatuses.has(previous.status) && !trackedStatuses.has(task.status);
+      });
+      const hasNewOutput = latest.some((task) => {
+        const previous = previousById.get(task.id);
+        return previous && !previous.output && task.output;
+      });
+      state.tasks = latest;
+
+      try {
+        state.agents = await fetchJson("/api/agents");
+        renderBottomPanel();
+      } catch (error) {
+        console.warn("Agent status refresh failed:", error.message);
+      }
+
+      if (state.activeTab === "tasks" && boardNeedsRefresh) {
+        renderActiveTab(true);
+      } else {
+        latest.forEach((task) => {
+          const previous = previousById.get(task.id);
+          if (previous && (trackedStatuses.has(previous.status) || task.status !== previous.status)) {
+            updateTaskProgressDom(task, previous);
+          }
+        });
+      }
+
+      if (hasFinishedTask || hasNewOutput) {
+        try {
+          state.files = await fetchJson("/api/files");
+          if (state.activeTab === "files") renderActiveTab(true);
+        } catch (error) {
+          console.warn("Generated file refresh failed:", error.message);
+        }
+      }
+    } catch (error) {
+      console.warn("Task progress refresh failed:", error.message);
+    } finally {
+      state.busy.taskProgress = false;
+    }
+  }, 3000);
+}
+
+function taskCardHtml(t, compact = false) {
+  const agent = state.agents.find((ag) => ag.id === t.assigned_agent_id);
+  const needs = t.needs_approval ? " needs-approval" : "";
+  const prio = t.priority === "high" ? " priority-high" : "";
+  const agentName = agent ? esc(agentShortName(agent.role)) : "—";
+  const hasOutput = Boolean(t.output || (t.media_files || []).length);
+  const output = hasOutput ? taskOutputHtml(t) : "";
+  const canArchive = ["done", "rejected", "blocked"].includes(t.status);
+  const isArchived = Boolean(t.archived_at);
+  const actions = t.needs_approval
+    ? `<div class="task-actions">
+         <button class="btn btn-success btn-sm" data-approve-task="${esc(t.id)}">✅ Approve</button>
+         <button class="btn btn-danger btn-sm" data-reject-task="${esc(t.id)}">❌ Reject</button>
+       </div>`
+    : t.status === "blocked"
+      ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-retry-task="${esc(t.id)}">↻ Retry task</button></div>`
+      : "";
+  const taskType = t.execution_mode === "project" ? '<span class="task-type">Project change</span>' : "";
+  return `
+    <div class="task-card${needs}${prio}${isArchived ? " task-card-archived" : ""}" data-task-id="${esc(t.id)}" data-status="${esc(t.status)}">
+      <div class="task-agent">${agentName} <span class="tag tag-${esc(t.status)}">${esc(statusLabel(t.status))}</span>${isArchived ? `<span class="task-archived-label">Archived</span>` : ""}</div>
+      <div class="task-title">${esc(t.title)}</div>
+      ${taskType}
+      ${compact ? "" : `<div class="task-desc">${esc(t.description)}</div>`}
+      ${t.result ? `<div class="task-result">${esc(t.result)}</div>` : ""}
+      ${taskProgressHtml(t)}
+      ${output}
+      ${actions}
+      ${canArchive && !isArchived ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-archive-task="${esc(t.id)}">Hide from board</button></div>` : ""}
+      ${isArchived ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-restore-task="${esc(t.id)}">Restore to board</button></div>` : ""}
+      <div class="task-meta"><span>Priority: ${esc(t.priority)}</span><span>${t.needs_approval ? "⚠️ Needs your approval" : (t.status === "done" ? "✅ Complete" : (t.execution_mode === "project" ? "🛠️ Changes applied in project" : "—"))}</span></div>
+    </div>`;
+}
+
+function openTaskDetails(taskId) {
+    const task = state.tasks.find((item) => item.id === taskId)
+      || state.archivedTasks.find((item) => item.id === taskId);
+    if (!task) {
+      notify("That task is no longer available. Refresh to load the latest task list.", "error");
+      return;
+    }
+    const existing = document.getElementById("taskDetailsOverlay");
+    if (existing) existing.remove();
+    const agent = state.agents.find((item) => item.id === task.assigned_agent_id);
+    const overlay = document.createElement("div");
+    overlay.id = "taskDetailsOverlay";
+    overlay.className = "task-details-overlay";
+    overlay.innerHTML = `
+      <section class="task-details-dialog" role="dialog" aria-modal="true" aria-labelledby="taskDetailsTitle">
+        <header class="task-details-header">
+          <div><div class="eyebrow">TASK DETAILS</div><h2 id="taskDetailsTitle" data-task-id="${esc(task.id)}">${esc(task.title)}</h2></div>
+          <button class="icon-btn" data-close-task-details aria-label="Close task details">×</button>
+        </header>
+        <div class="task-details-meta">
+          <span class="tag tag-${esc(task.status)}">${esc(statusLabel(task.status))}</span>
+          <span>Owner: ${esc(agent ? agent.name : "Unassigned")}</span>
+          <span>Priority: ${esc(task.priority)}</span>
+          <span>Updated: ${new Date(task.updated_at).toLocaleString()}</span>
+        </div>
+        ${task.execution_mode === "project" ? `<div class="task-type">Project change</div>` : ""}
+        <h3>Task</h3><p class="task-details-description">${esc(task.description || "No description was provided.")}</p>
+        ${taskProgressHtml(task)}
+        ${task.result ? `<h3>Latest update</h3><p class="task-details-result">${esc(task.result)}</p>` : ""}
+        ${task.output || (task.media_files || []).length ? `<h3>Agent output</h3><div class="task-details-output">${taskOutputHtml(task)}</div>` : `<div class="task-details-empty">No output has been recorded yet.</div>`}
+        ${task.needs_approval ? `<div class="task-actions"><button class="btn btn-success btn-sm" data-approve-task="${esc(task.id)}">Approve</button><button class="btn btn-danger btn-sm" data-reject-task="${esc(task.id)}">Reject</button></div>` : ""}
+        ${task.status === "blocked" ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-retry-task="${esc(task.id)}">Retry task</button></div>` : ""}
+        ${task.archived_at ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-restore-task="${esc(task.id)}">Restore to board</button></div>` : ""}
+        ${["done", "rejected", "blocked"].includes(task.status) && !task.archived_at ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-archive-task="${esc(task.id)}">Hide from board (keep in memory)</button></div>` : ""}
+      </section>
+    `;
+    document.getElementById("content").appendChild(overlay);
+    overlay.querySelector("button[data-close-task-details]")?.focus({ preventScroll: true });
+    saveLastView();
+}
+
+/* ------------------------------------------------------------------ */
+/* Team                                                                */
+/* ------------------------------------------------------------------ */
+
+function renderTeam() {
+  const selectedAgent = state.selectedAgentId
+    ? state.agents.find((a) => a.id === state.selectedAgentId)
+    : null;
+  if (selectedAgent) {
+    renderAgentDetail(selectedAgent);
+    return;
+  }
+
+  const workerOptions = state.agents
+    .filter((a) => a.role !== "Chief Executive Officer")
+    .map((a) => `<option value="${esc(a.id)}">${esc(a.name)} — ${esc(a.role)}</option>`)
+    .join("");
+
+  document.getElementById("content").innerHTML = `
+    <div class="section">
+      <div class="section-title">Team Members</div>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Click any agent to see their tasks, outputs, messages and activity.</p>
+      <div class="agent-grid">${state.agents.map((a) => agentCardHtml(a, true)).join("")}</div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Create a specialist agent</div>
+      <form id="createAgentForm" class="card" style="max-width:620px;display:grid;gap:12px;">
+        <label>Agent name<input name="name" maxlength="60" required placeholder="e.g. Product Analyst"></label>
+        <label>Job title<input name="job_title" maxlength="60" required placeholder="e.g. Market Research Specialist"></label>
+        <label>Icon<input name="display_icon" maxlength="12" placeholder="Optional"></label>
+        <label>Job title and responsibilities<textarea name="job_profile" maxlength="3000" rows="4" required placeholder="Describe the agent's expertise, responsibilities, and how it should deliver work."></textarea></label>
+        <button class="btn btn-primary" type="submit">Create agent</button>
+      </form>
+    </div>
+
+    <div class="section" id="assignWorkSection">
+      <div class="section-title">✍️ Assign Work Personally</div>
+      <div class="card" style="max-width:620px;">
+        <div class="input-wrap">
+          <label>Task title</label>
+          <input id="newTaskTitle" placeholder="e.g. Research prop firms using Alpaca">
+        </div>
+        <div class="input-wrap">
+          <label>Description</label>
+          <textarea id="newTaskDesc" placeholder="What should this agent do?"></textarea>
+        </div>
+        <div class="input-wrap">
+          <label>Assign to</label>
+          <select id="newTaskAgent">
+            <option value="">Auto-assign (CEO decides)</option>
+            ${workerOptions}
+          </select>
+        </div>
+        <div class="input-wrap">
+          <label>Priority</label>
+          <select id="newTaskPriority">
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+        <div class="input-wrap">
+          <label>How should the team deliver?</label>
+          <select id="newTaskMode">
+            <option value="deliverable">Create a written deliverable</option>
+            <option value="project">Make changes directly in my project (Codex CLI)</option>
+          </select>
+          <div class="config-hint">Project changes run in the configured workspace with Codex's workspace-write sandbox. Review changes in your project after the task.</div>
+        </div>
+        <button class="btn btn-primary" id="btnCreateTask">Create Task</button>
+      </div>
+    </div>
+  `;
+
+  const btn = document.getElementById("btnCreateTask");
+  if (btn) btn.addEventListener("click", createTaskFromUI);
+  const createAgentForm = document.getElementById("createAgentForm");
+  if (createAgentForm) createAgentForm.addEventListener("submit", createAgentFromUI);
+}
+
+function renderAgentDetail(agent) {
+  const agentTasks = state.tasks.filter((t) => t.assigned_agent_id === agent.id);
+  const agentMessages = state.messages.filter((m) => m.sender === agent.name || m.receiver === agent.name);
+  const agentActivity = state.activity.filter((a) => a.actor === agent.name);
+  const schedules = state.agentSchedules.filter((schedule) => schedule.agent_id === agent.id);
+  const stars = Math.max(0, Number(agent.appreciation_stars || 0));
+  const starBadge = stars
+    ? `<div class="agent-appreciation-badge" aria-label="${stars} appreciation stars"><span>${"⭐".repeat(Math.min(3, stars))}</span>${stars > 3 ? `<b>+${stars - 3} more</b>` : ""}</div>`
+    : "";
+  let caps = [];
+  try {
+    caps = JSON.parse(agent.capabilities || "[]");
+  } catch (e) {
+    caps = [];
+  }
+  const statusBadge = {
+    idle: '<span class="agent-badge badge-idle">Idle</span>',
+    assigned: '<span class="agent-badge badge-assigned">Assigned</span>',
+    working: '<span class="agent-badge badge-working">Working</span>',
+    done: '<span class="agent-badge badge-done">Done</span>',
+  }[agent.status] || '<span class="agent-badge badge-idle">Idle</span>';
+
+  document.getElementById("content").innerHTML = `
+    <div class="section">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <button class="btn btn-outline btn-sm" data-back-team="1">← Back to Team</button>
+        <div style="font-size:13px;color:var(--muted);">Agent Detail</div>
+      </div>
+      <div class="card" style="max-width:760px;">
+        <div class="agent-head">
+          <div class="agent-avatar agent-${ROLE_COLOR[agent.role] || ""}">${agentIcon(agent)}</div>
+          <div class="agent-info">
+            <div class="agent-name">${esc(agent.name)}</div>
+            <div class="agent-role">${esc(agent.role)}</div>
+          </div>
+          ${statusBadge}
+        </div>
+        ${starBadge}
+        <div class="agent-caps" style="margin-top:10px;">Capabilities: ${caps.join(", ")}</div>
+        <div class="agent-profile-stats">
+          <span><b>${Number(agent.task_count || 0)}</b> tasks</span>
+          <span><b>${Number(agent.completed_count || 0)}</b> completed</span>
+          <span><b>${Number(agent.blocked_count || 0)}</b> blocked</span>
+          <span><b>${Number(agent.rejected_count || 0)}</b> rejected</span>
+        </div>
+        <div class="agent-job-profile"><b>Job profile</b><p>${esc(agent.job_profile || agent.role)}</p></div>
+        <div class="agent-current" style="margin-top:8px;">Current task: ${agent.current_task_id ? esc((state.tasks.find((t) => t.id === agent.current_task_id) || {}).title || "—") : "None"}</div>
+        <details class="agent-profile-editor">
+          <summary>Edit agent profile</summary>
+          <form id="agentProfileForm" data-agent-profile="${esc(agent.id)}">
+            <label>Display name<input name="name" maxlength="60" required value="${esc(agent.name)}"></label>
+            ${agent.is_custom ? `<label>Job title<input name="job_title" maxlength="60" required value="${esc(agent.role)}"></label>` : ""}
+            <label>Icon / emoji<input name="display_icon" maxlength="12" value="${esc(agent.display_icon || "")}" placeholder="${esc(agentIcon(agent.role))}"></label>
+            <label>Job profile<textarea name="job_profile" maxlength="3000" rows="4" required>${esc(agent.job_profile || agent.role)}</textarea></label>
+            <label>Report voice profile<input name="voice_profile" maxlength="120" value="${esc(agent.voice_profile || "")}" placeholder="Optional browser voice name"></label>
+            <small>Role identity stays fixed for task routing. Voice availability depends on voices installed in your browser/OS.</small>
+            <button class="btn btn-primary btn-sm" type="submit">Save profile</button>
+          </form>
+        </details>
+        <section class="agent-schedule-section">
+          <h3>Recurring work</h3>
+          <p>Schedules use this computer's local time. Each run enters the shared queue and waits its turn.</p>
+          <div class="agent-schedule-list">${schedules.map((schedule) => `
+            <article class="agent-schedule-card">
+              <div><b>${esc(schedule.title)}</b><small>${esc(schedule.frequency)} · ${esc(schedule.local_time)}${schedule.weekday !== null && schedule.weekday !== undefined ? ` · ${["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][Number(schedule.weekday)] || ""}` : ""}</small></div>
+              <button class="btn btn-outline btn-sm" data-delete-schedule="${esc(schedule.id)}">Cancel</button>
+            </article>`).join("") || `<div class="empty-state">No recurring work scheduled.</div>`}</div>
+          ${agent.role !== "Chief Executive Officer" ? `
+            <form id="agentScheduleForm" data-agent-schedule="${esc(agent.id)}">
+              <label>Task title<input name="title" maxlength="120" required placeholder="e.g. Review competitor updates"></label>
+              <label>Instructions<textarea name="description" maxlength="3000" rows="3" required placeholder="Describe the work to run each time."></textarea></label>
+              <div class="agent-schedule-fields">
+                <label>Repeats<select name="frequency"><option value="daily">Every day</option><option value="weekly">Every week</option></select></label>
+                <label>Local time<input name="local_time" type="time" required value="09:00"></label>
+                <label>Weekday<select name="weekday"><option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option></select></label>
+              </div>
+              <button class="btn btn-primary btn-sm" type="submit">Schedule recurring task</button>
+            </form>` : ""}
+        </section>
+      </div>
+
+      <div style="display:flex;gap:10px;margin:14px 0;">
+        <button class="btn btn-primary" data-chat-agent="${esc(agent.name)}">💬 Chat with ${esc(agent.name)}</button>
+        <button class="btn btn-outline" id="btnRefreshAgent">🔄 Refresh</button>
+        ${agent.role !== "Chief Executive Officer" ? `<button class="btn btn-outline btn-danger" data-delete-agent="${esc(agent.id)}">Delete agent</button>` : ""}
+      </div>
+
+      <div class="section-title" style="margin-bottom:8px;">📋 Tasks (${agentTasks.length})</div>
+      <div style="max-width:760px;">
+        ${agentTasks.map((t) => taskCardHtml(t)).join("") || "<div class='empty'>No tasks assigned yet.</div>"}
+      </div>
+
+      <div class="section-title mt-8" style="margin-bottom:8px;">💬 Recent Messages</div>
+      <div class="msg-list" style="max-width:760px;">
+        ${agentMessages.map((m) => messageHtml(m)).join("") || "<div class='empty'>No messages yet.</div>"}
+      </div>
+
+      <div class="section-title mt-8" style="margin-bottom:8px;">🕓 Activity</div>
+      <div style="max-width:760px;">
+        ${agentActivity.map((a) => feedItemHtml(a)).join("") || "<div class='empty'>No activity yet.</div>"}
+      </div>
+    </div>
+  `;
+
+  const refresh = document.getElementById("btnRefreshAgent");
+  if (refresh) {
+    refresh.addEventListener("click", async () => {
+      await loadAll();
+      renderAgentDetail(agent);
+    });
+  }
+  const profileForm = document.getElementById("agentProfileForm");
+  if (profileForm) profileForm.addEventListener("submit", saveAgentProfile);
+  const scheduleForm = document.getElementById("agentScheduleForm");
+  if (scheduleForm) scheduleForm.addEventListener("submit", createAgentSchedule);
+}
+
+async function saveAgentProfile(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const agentId = form.getAttribute("data-agent-profile");
+  const payload = {
+    name: form.elements.name.value.trim(),
+    job_title: form.elements.job_title ? form.elements.job_title.value.trim() : null,
+    display_icon: form.elements.display_icon.value.trim(),
+    job_profile: form.elements.job_profile.value.trim(),
+    voice_profile: form.elements.voice_profile.value.trim(),
+  };
+  try {
+    await fetchJson(`/api/agents/${encodeURIComponent(agentId)}`, { method: "PUT", body: payload });
+    state.selectedAgentId = agentId;
+    await loadAll();
+    renderActiveTab(false);
+    notify("Agent profile saved", "success");
+  } catch (error) {
+    notify("Could not save agent profile: " + error.message, "error");
+  }
+}
+
+async function createAgentFromUI(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const payload = {
+      name: form.elements.name.value.trim(),
+      job_title: form.elements.job_title.value.trim(),
+      display_icon: form.elements.display_icon.value.trim(),
+      job_profile: form.elements.job_profile.value.trim(),
+    };
+    try {
+      const result = await fetchJson("/api/agents", { method: "POST", body: payload });
+      await loadAll();
+      state.selectedAgentId = result.id;
+      renderActiveTab(false);
+      notify("Specialist agent created", "success");
+    } catch (error) {
+      notify("Could not create agent: " + error.message, "error");
+    }
+  }
+
+async function createAgentSchedule(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const frequency = form.elements.frequency.value;
+    const payload = {
+      title: form.elements.title.value.trim(),
+      description: form.elements.description.value.trim(),
+      frequency,
+      local_time: form.elements.local_time.value,
+      weekday: frequency === "weekly" ? Number(form.elements.weekday.value) : null,
+    };
+    try {
+      await fetchJson(`/api/agents/${encodeURIComponent(form.dataset.agentSchedule)}/schedules`, {
+        method: "POST",
+        body: payload,
+      });
+      await loadAll();
+      renderActiveTab(false);
+      notify("Recurring work scheduled", "success");
+    } catch (error) {
+      notify("Could not schedule recurring work: " + error.message, "error");
+    }
+  }
+
+async function deleteAgent(agentId) {
+    const agent = state.agents.find((item) => item.id === agentId);
+    if (!agent || !confirm(`Delete ${agent.name}? Its task history will be preserved. Open tasks must be reassigned first.`)) return;
+    try {
+      await fetchJson(`/api/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" });
+      state.selectedAgentId = null;
+      await loadAll();
+      renderActiveTab(false);
+      notify("Agent deleted; history preserved", "success");
+    } catch (error) {
+      notify("Could not delete agent: " + error.message, "error");
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Task board                                                          */
+/* ------------------------------------------------------------------ */
+
+function renderProject() {
+  const project = state.project || {};
+  const ready = !!project.codex_available;
+  document.getElementById("content").innerHTML = `
+    <div class="section">
+      <div class="section-title">🛠️ Let the team work in your project</div>
+      <p class="project-intro">Choose the project folder once. Project tasks are assigned to Engineering, which uses the installed Codex CLI to read, edit, and test files in that folder instead of returning suggestions only.</p>
+      <div class="card project-setup-card">
+        <div class="input-wrap">
+          <label for="projectWorkspace">Project folder path</label>
+          <input id="projectWorkspace" type="text" spellcheck="false" placeholder="C:\\path\\to\\your\\project" value="${esc(project.workspace_path || "")}">
+          <div class="config-hint">Use an absolute local path. Changes are limited by Codex's workspace-write sandbox; the agent is instructed not to commit or deploy.</div>
+        </div>
+        <div class="project-runtime ${ready ? "runtime-ready" : "runtime-missing"}">
+          <span class="runtime-dot"></span>
+          ${ready ? `Codex CLI found${project.codex_command ? `: ${esc(project.codex_command)}` : ""}` : "Codex CLI not found on the server PATH"}
+        </div>
+        <div class="project-actions">
+          <button class="btn btn-primary" id="btnSaveWorkspace">Save project folder</button>
+          <button class="btn btn-outline" id="btnClearWorkspace" ${project.workspace_path ? "" : "disabled"}>Clear folder</button>
+          <button class="btn btn-outline" data-goto="tasks">Open task board</button>
+        </div>
+        ${!ready ? `<div class="notice-card project-notice"><div><b>Install Codex CLI and sign in</b><div class="config-hint">Project execution needs a working local Codex CLI installation. Text deliverables continue to use your configured AI provider.</div></div></div>` : ""}
+      </div>
+      <div class="card project-memory-card">
+        <div class="section-title">Persistent project memory</div>
+        <p class="config-hint">A short local file is included in future coding tasks so the agent can continue from prior completed work.</p>
+        <pre class="project-memory">${esc(project.memory || "No project work has been completed yet.")}</pre>
+      </div>
+    </div>
+  `;
+  const save = document.getElementById("btnSaveWorkspace");
+  if (save) save.addEventListener("click", () => saveProjectWorkspace(false));
+  const clear = document.getElementById("btnClearWorkspace");
+  if (clear) clear.addEventListener("click", () => saveProjectWorkspace(true));
+}
+
+async function saveProjectWorkspace(clear) {
+  const input = document.getElementById("projectWorkspace");
+  const workspace_path = clear ? "" : (input ? input.value.trim() : "");
+  try {
+    const project = await fetchJson("/api/project/settings", {
+      method: "POST",
+      body: { workspace_path },
+    });
+    state.project = project;
+    renderActiveTab(true);
+    notify(clear ? "Project folder cleared" : "Project folder saved", "success");
+  } catch (e) {
+    notify("Could not save project folder: " + e.message, "error");
+  }
+}
+
+function renderTasksBoard() {
+  const cols = [
+    { key: "backlog", title: "📥 Backlog" },
+    { key: "assigned", title: "⏳ To Do" },
+    { key: "in_progress", title: "🔄 In Progress" },
+    { key: "waiting_engineering", title: "🛠️ Waiting for Engineering" },
+    { key: "review", title: "👀 CEO Review" },
+    { key: "done", title: "✅ Done" },
+    { key: "rejected", title: "❌ Rejected" },
+    { key: "blocked", title: "⛔ Blocked" },
+  ];
+  const workerOptions = state.agents
+    .filter((a) => a.role !== "Chief Executive Officer")
+    .map((a) => `<option value="${esc(a.id)}">${esc(a.name)}</option>`)
+    .join("");
+
+  document.getElementById("content").innerHTML = `
+    <div class="section">
+      <div class="board-intro">
+        <div><div class="eyebrow">EXECUTION CENTER</div><h2>Work, clearly moving forward.</h2><p>Assign an outcome, see who owns it, and review the actual result.</p></div>
+        <button class="btn btn-primary" id="btnOpenBoardCreate">＋ New task</button>
+      </div>
+      <div class="board-toolbar">
+        <label class="board-search"><span>⌕</span><input id="taskSearch" type="search" placeholder="Search tasks, owners, or results…" aria-label="Search tasks"></label>
+        <select id="taskStatusFilter" aria-label="Filter tasks by status"><option value="">All statuses</option>${cols.map((col) => `<option value="${col.key}">${col.title.replace(/^[^ ]+ /, "")}</option>`).join("")}</select>
+        <span class="board-task-total">${state.tasks.length} tasks</span>
+        <button class="btn btn-outline btn-sm" id="toggleArchivedTasks">${state.showArchivedTasks ? "Hide archived" : "Show archived"}</button>
+      </div>
+      <details class="create-task-panel">
+        <summary>➕ Assign a new task</summary>
+        <div class="card" style="max-width:640px;margin-top:10px;">
+          <div class="input-wrap">
+            <label>Task title</label>
+            <input id="boardTaskTitle" placeholder="What needs doing?">
+          </div>
+          <div class="input-wrap">
+            <label>Description</label>
+            <textarea id="boardTaskDesc" placeholder="Details for the agent…"></textarea>
+          </div>
+          <div class="flex" style="display:flex;gap:10px;">
+            <div class="input-wrap" style="flex:1;">
+              <label>Assign to</label>
+              <select id="boardTaskAgent">
+                <option value="">Auto-assign (CEO)</option>
+                ${workerOptions}
+              </select>
+            </div>
+            <div class="input-wrap" style="flex:1;">
+              <label>Priority</label>
+              <select id="boardTaskPriority">
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="low">Low</option>
+              </select>
+            </div>
+          </div>
+          <div class="input-wrap">
+            <label>How should the team deliver?</label>
+            <select id="boardTaskMode">
+              <option value="deliverable">Create a written deliverable</option>
+              <option value="project">Make changes directly in my project (Codex CLI)</option>
+            </select>
+            <div class="config-hint">Project changes run inside your configured workspace. <a href="#" data-goto="project">Set up the workspace first.</a></div>
+          </div>
+          <button class="btn btn-primary" id="btnBoardCreate">Create Task</button>
+        </div>
+      </details>
+      <div class="board">
+        ${cols.map((col) => {
+          const tasks = state.tasks.filter((t) => t.status === col.key);
+          return `
+            <div class="board-col" data-board-status="${esc(col.key)}">
+              <div class="board-col-header"><span>${col.title}</span><span class="board-col-count">${tasks.length}</span></div>
+              <div class="board-col-body">${tasks.map((t) => taskCardHtml(t, true)).join("") || "<div class='empty'>—</div>"}</div>
+            </div>`;
+        }).join("")}
+      </div>
+      ${state.showArchivedTasks ? `
+        <section class="archived-tasks-panel">
+          <div class="panel-heading"><div><div class="eyebrow">TASK HISTORY</div><h3>Archived tasks</h3></div><span>${state.archivedTasks.length} saved</span></div>
+          <div class="archived-task-list">${state.archivedTasks.map((task) => taskCardHtml(task, true)).join("") || `<div class="empty-state">No tasks have been archived.</div>`}</div>
+        </section>` : ""}
+    </div>
+  `;
+
+  const btn = document.getElementById("btnBoardCreate");
+  if (btn) btn.addEventListener("click", createBoardTask);
+  const openCreate = document.getElementById("btnOpenBoardCreate");
+  if (openCreate) openCreate.addEventListener("click", () => {
+    const panel = document.querySelector(".create-task-panel");
+    if (panel) {
+      panel.open = true;
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      document.getElementById("boardTaskTitle").focus({ preventScroll: true });
+    }
+  });
+  const search = document.getElementById("taskSearch");
+  const statusFilter = document.getElementById("taskStatusFilter");
+  const archivedToggle = document.getElementById("toggleArchivedTasks");
+  if (archivedToggle) archivedToggle.addEventListener("click", async () => {
+    if (!state.showArchivedTasks) {
+      try {
+        const allTasks = await fetchJson("/api/tasks?include_archived=true");
+        state.archivedTasks = allTasks.filter((task) => Boolean(task.archived_at));
+        state.showArchivedTasks = true;
+        renderActiveTab(false);
+      } catch (error) {
+        notify("Could not load archived tasks: " + error.message, "error");
+      }
+    } else {
+      state.showArchivedTasks = false;
+      renderActiveTab(false);
+    }
+  });
+  const filterTasks = () => {
+    const query = (search ? search.value : "").trim().toLowerCase();
+    const status = statusFilter ? statusFilter.value : "";
+    document.querySelectorAll(".board-col").forEach((column) => {
+      let visible = 0;
+      column.querySelectorAll(".task-card").forEach((card) => {
+        const matchesText = !query || card.textContent.toLowerCase().includes(query);
+        const matchesStatus = !status || card.dataset.status === status;
+        card.hidden = !matchesText || !matchesStatus;
+        if (!card.hidden) visible += 1;
+      });
+      const count = column.querySelector(".board-col-count");
+      if (count) count.textContent = visible;
+    });
+  };
+  if (search) search.addEventListener("input", filterTasks);
+  if (statusFilter) statusFilter.addEventListener("change", filterTasks);
+}
+
+async function createBoardTask() {
+  const title = document.getElementById("boardTaskTitle").value.trim();
+  const description = document.getElementById("boardTaskDesc").value.trim();
+  const agentId = document.getElementById("boardTaskAgent").value || null;
+  const priority = document.getElementById("boardTaskPriority").value;
+  const execution_mode = document.getElementById("boardTaskMode").value;
+  if (!title) {
+    notify("Enter a task title", "error");
+    return;
+  }
+  try {
+    await fetchJson("/api/tasks", { method: "POST", body: { title, description, assigned_agent_id: agentId, priority, execution_mode } });
+    notify("Task created", "success");
+    await loadAll();
+    renderActiveTab(false);
+  } catch (e) {
+    notify("Could not create task: " + e.message, "error");
+  }
+}
+
+async function createTaskFromUI() {
+  const title = document.getElementById("newTaskTitle").value.trim();
+  const description = document.getElementById("newTaskDesc").value.trim();
+  const agentId = document.getElementById("newTaskAgent").value || null;
+  const priority = document.getElementById("newTaskPriority").value;
+  const execution_mode = document.getElementById("newTaskMode").value;
+  if (!title) {
+    notify("Enter a task title", "error");
+    return;
+  }
+  try {
+    await fetchJson("/api/tasks", { method: "POST", body: { title, description, assigned_agent_id: agentId, priority, execution_mode } });
+    document.getElementById("newTaskTitle").value = "";
+    document.getElementById("newTaskDesc").value = "";
+    notify("Task created — the CEO/agent will pick it up", "success");
+    await loadAll();
+    renderActiveTab(false);
+  } catch (e) {
+    notify("Could not create task: " + e.message, "error");
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Chat                                                                */
+/* ------------------------------------------------------------------ */
+
+function renderChatTab() {
+  const existingList = document.getElementById("msgList");
+  const previousScroll = existingList ? existingList.scrollTop : 0;
+  const wasNearBottom = existingList
+    ? existingList.scrollHeight - existingList.scrollTop - existingList.clientHeight < 80
+    : true;
+  const receiver = state.chatReceiver || "CEO";
+  const conversation = receiver === "user"
+    ? state.messages.filter((message) => message.sender === "user" && message.receiver === "user")
+    : state.messages.filter((message) =>
+      (message.sender === "user" && message.receiver === receiver) ||
+      (message.sender === receiver && message.receiver === "user")
+    );
+  const messages = conversation.map(messageHtml).join("");
+  const typing = Object.keys(state.typing)
+    .filter((name) => state.typing[name])
+    .map((name) => `<div class="msg them typing">${esc(name)} is typing…</div>`)
+    .join("");
+  document.getElementById("content").innerHTML = `
+    <div class="chat-panel">
+      <div class="chat-panel-header">
+        <div>
+          <div style="font-weight:700;">💬 Team Chat</div>
+          <label class="chat-recipient-label" for="chatReceiverLive">Conversation with</label>
+        </div>
+        <select id="chatReceiverLive" aria-label="Choose who to chat with">${buildReceiverOptions()}</select>
+      </div>
+      <div class="msg-list" id="msgList">${messages}${typing}</div>
+      <div class="chat-input-wrap">
+        <input type="text" id="chatInput" placeholder="Message the team… (e.g. 'assign me a task', 'what's my status?')">
+        <button class="btn btn-primary btn-sm" id="chatSend">Send</button>
+      </div>
+    </div>
+  `;
+
+  const list = document.getElementById("msgList");
+  if (list) {
+    list.scrollTop = wasNearBottom ? list.scrollHeight : previousScroll;
+    list.addEventListener("scroll", () => { state.chatScrollTop = list.scrollTop; }, { passive: true });
+  }
+  const sel = document.getElementById("chatReceiverLive");
+  if (sel) {
+    sel.value = state.chatReceiver;
+    sel.addEventListener("change", (e) => {
+      state.chatReceiver = e.target.value;
+      const fixed = document.getElementById("chatReceiverFixed");
+      if (fixed) fixed.value = state.chatReceiver;
+      renderActiveTab(false);
+    });
+  }
+  const send = document.getElementById("chatSend");
+  if (send) send.addEventListener("click", () => sendChat("tab"));
+  const input = document.getElementById("chatInput");
+  if (input) input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendChat("tab");
+    }
+  });
+}
+
+function buildReceiverOptions() {
+  const agents = state.agents.length
+    ? state.agents
+    : [{ name: "CEO", role: "Chief Executive Officer" }];
+  const opts = agents.map((a) => `<option value="${esc(a.name)}">${agentIcon(a.role)} ${esc(a.name)} — ${esc(a.role)}</option>`).join("");
+  return opts + `<option value="user">👤 You (personal note)</option>`;
+}
+
+function messageHtml(m) {
+  const me = m.sender === "user";
+  const cls = me ? "msg me" : m.sender === "system" ? "msg sys" : "msg them";
+  const name = me ? "You" : esc(m.sender);
+  const time = new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const body = esc(m.content).replace(/\n/g, "<br>");
+  return `<div class="${cls}">
+    <div style="font-weight:700;font-size:12px;margin-bottom:2px;">${name}</div>
+    ${body}
+    <span class="msg-time">${time}</span>
+  </div>`;
+}
+
+async function sendChat(source) {
+  const inputId = source === "fixed" ? "chatInputFixed" : "chatInput";
+  const selectId = source === "fixed" ? "chatReceiverFixed" : "chatReceiverLive";
+  const input = document.getElementById(inputId);
+  const select = document.getElementById(selectId);
+  if (!input) return;
+  const text = input.value.trim();
+  const receiver = (select && select.value) || state.chatReceiver || "CEO";
+  if (!text) return;
+
+  input.value = "";
+  state.chatReceiver = receiver;
+  state.busy.chat = true;
+
+  // Optimistic message so the user sees it immediately.
+  state.messages.push({
+    id: "tmp_" + Date.now(),
+    sender: "user",
+    receiver,
+    content: text,
+    timestamp: new Date().toISOString(),
+    read: 0,
+  });
+  renderActiveTab(true);
+  renderFixedChat(true);
+
+  try {
+    await fetchJson("/api/messages", { method: "POST", body: { sender: "user", receiver, content: text } });
+
+    if (receiver !== "user") {
+      state.typing[receiver] = true;
+      renderActiveTab(true);
+      renderFixedChat(true);
+      await fetchJson("/api/agent-reply", { method: "POST", body: { sender: "user", receiver, content: text } });
+    }
+    await loadAll();
+    renderActiveTab(true);
+    renderFixedChat(true);
+    checkApprovals();
+  } catch (e) {
+    state.messages.push({
+      id: "err_" + Date.now(),
+      sender: "system",
+      receiver: "user",
+      content: "⚠️ " + e.message,
+      timestamp: new Date().toISOString(),
+      read: 0,
+    });
+    renderActiveTab(true);
+    renderFixedChat(true);
+    notify("Chat error: " + e.message, "error");
+  } finally {
+    state.typing[receiver] = false;
+    state.busy.chat = false;
+    renderActiveTab(true);
+    renderFixedChat(true);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Fixed chat popup                                                    */
+/* ------------------------------------------------------------------ */
+
+let fixedChatReceiverWired = false;
+
+function renderFixedChat(preserve = false) {
+  const list = document.getElementById("chatMessages");
+  if (!list) return;
+  const scrollTop = preserve ? list.scrollTop : null;
+  const nearBottom = preserve
+    ? list.scrollHeight - list.scrollTop - list.clientHeight < 80
+    : true;
+  const typing = Object.keys(state.typing)
+    .filter((name) => state.typing[name])
+    .map((name) => `<div class="msg them typing">${esc(name)} is typing…</div>`)
+    .join("");
+  list.innerHTML = state.messages.map(messageHtml).join("") + typing;
+  list.scrollTop = nearBottom || scrollTop == null
+    ? list.scrollHeight
+    : Math.min(scrollTop, list.scrollHeight - list.clientHeight);
+
+  const sel = document.getElementById("chatReceiverFixed");
+  if (sel) {
+    const current = sel.value || state.chatReceiver;
+    sel.innerHTML = buildReceiverOptions();
+    sel.value = current;
+    if (!fixedChatReceiverWired) {
+      sel.addEventListener("change", (e) => {
+        state.chatReceiver = e.target.value;
+        const live = document.getElementById("chatReceiverLive");
+        if (live) live.value = state.chatReceiver;
+      });
+      fixedChatReceiverWired = true;
+    }
+  }
+
+  const btn = document.getElementById("chatSendFixed");
+  if (btn && !btn.dataset.wired) {
+    btn.dataset.wired = "1";
+    btn.addEventListener("click", () => sendChat("fixed"));
+  }
+  const input = document.getElementById("chatInputFixed");
+  if (input && !input.dataset.wired) {
+    input.dataset.wired = "1";
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendChat("fixed");
+      }
+    });
+  }
+}
+
+function openChat() {
+  const wrap = document.getElementById("chatWrap");
+  const ball = document.getElementById("chatRestoreBtn");
+  if (wrap) wrap.style.display = "flex";
+  if (ball) ball.style.display = "none";
+}
+
+function hideChat() {
+  const wrap = document.getElementById("chatWrap");
+  const ball = document.getElementById("chatRestoreBtn");
+  if (wrap) wrap.style.display = "none";
+  if (ball) ball.style.display = "grid";
+}
+
+/* ------------------------------------------------------------------ */
+/* Approvals                                                           */
+/* ------------------------------------------------------------------ */
+
+function checkApprovals() {
+  const pending = state.approvals.filter((a) => a.status === "pending");
+  const toast = document.getElementById("approvalToast");
+  if (!toast) return;
+
+  if (!pending.length) {
+    toast.style.display = "none";
+    return;
+  }
+
+  const ap = pending[0];
+  const msg = document.getElementById("toastMsg");
+  const time = document.getElementById("toastTime");
+  const note = document.getElementById("toastNote");
+  if (msg) msg.textContent = ap.description;
+  if (time) time.textContent = new Date(ap.requested_at).toLocaleTimeString();
+  if (note) {
+    const extra = pending.length > 1 ? ` (+${pending.length - 1} more waiting)` : "";
+    note.textContent = `Task: ${ap.task_title || "a task"} — Agent: ${ap.agent_name || "—"}${extra}`;
+  }
+  toast.style.display = "block";
+
+  const approve = document.getElementById("apprApprove");
+  const reject = document.getElementById("apprReject");
+  if (approve) approve.onclick = () => handleApproval(ap.task_id, true);
+  if (reject) reject.onclick = () => handleApproval(ap.task_id, false);
+}
+
+async function handleApproval(taskId, approved) {
+  try {
+    await fetchJson(`/api/tasks/${taskId}/approve`, { method: "POST", body: { approved } });
+    notify(approved ? "Task approved" : "Task rejected", approved ? "success" : "info");
+    await loadAll();
+    renderActiveTab(true);
+    renderBottomPanel();
+    renderFixedChat(true);
+    checkApprovals();
+  } catch (e) {
+    notify("Approval failed: " + e.message, "error");
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Resources                                                           */
+/* ------------------------------------------------------------------ */
+
+function renderResources() {
+  const platforms = [
+    { key: "gmail", label: "Gmail / Email", icon: "&#9993;", hint: "Verify SMTP and IMAP credentials. Emails are sent only after you review a draft and explicitly choose Send.", setup: "Enable 2-Step Verification and create a Google App Password. The app verifies SMTP STARTTLS and IMAP over SSL before saving credentials in the ignored backend/.env file. The password is never returned to the browser.", setupUrl: "https://support.google.com/accounts/answer/185833" },
+    { key: "instagram", label: "Instagram", icon: "&#128247;", hint: "Meta publishing is not active. Requires a professional account and public HTTPS media.", setup: "A live connection requires an eligible Instagram professional account, a Meta developer app with approved permissions, and OAuth token handling. This app cannot publish or read Instagram yet.", setupUrl: "https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/" },
+    { key: "linkedin", label: "LinkedIn", icon: "&#128188;", hint: "LinkedIn OAuth and publishing connector is not active.", setup: "A live connection requires a LinkedIn developer app, approved product access, OAuth, and the required organization/person permissions. This app cannot publish or read LinkedIn yet.", setupUrl: "https://learn.microsoft.com/linkedin/marketing/community-management/shares/posts-api" },
+    { key: "google_analytics", label: "Google Analytics", icon: "&#128202;", hint: "Read a 30-day GA4 report. Configure the OAuth client in the Google Sheets card first.", setup: "Add the GA4 property ID below, enable the Google Analytics Data API in Google Cloud, and grant the connected Google account Viewer access to that property.", setupUrl: "https://developers.google.com/analytics/devguides/reporting/data/v1/quickstart-client-libraries" },
+    { key: "google_sheets", label: "Google Sheets", icon: "&#128200;", hint: "Save multiple spreadsheet links and let agents read relevant data when a task asks for it. Access is read-only.", setup: "Saving a spreadsheet URL does not grant access. Configure a Google Cloud OAuth client and authorize the requested read-only Sheets and Analytics scopes here.", setupUrl: "https://developers.google.com/workspace/sheets/api/quickstart/python" },
+    { key: "domain_manager", label: "Domain Manager", icon: "&#127760;", hint: "A website URL is known, but its DNS/API provider has not been identified.", setup: "Identify the domain registrar or DNS host first (for example Cloudflare, Route 53, or your registrar). A supported provider API and scoped token are required; this app currently has no DNS connector.", setupUrl: "https://developers.cloudflare.com/fundamentals/api/get-started/create-token/" },
+    { key: "telegram", label: "Telegram", icon: "&#9992;", hint: "Verify bots and queue posts for your approval before sending." },
+  ];
+  const connectedTelegram = state.accounts.filter((account) => account.platform === "telegram" && account.status === "connected" && account.verified);
+
+  document.getElementById("content").innerHTML = `
+    <section class="resource-hero">
+      <div><div class="eyebrow">CONNECTED WORKSPACE</div><h2>Resources, with honest status.</h2>
+        <p>Only provider-verified accounts are marked connected. Google Sheets and Analytics access is read-only; unsupported integrations remain clearly marked.</p></div>
+      <span class="resource-safety-badge">Outbound posts require approval</span>
+    </section>
+    <div class="resource-grid">
+      ${platforms.map((platform) => {
+        const accounts = state.accounts.filter((account) => account.platform === platform.key);
+        const verified = accounts.filter((account) => account.status === "connected" && account.verified);
+        const googleOAuthConnected = state.accounts.some((account) =>
+          account.platform === "google_oauth" && account.status === "connected" && account.verified);
+        const activeConnection = verified.length > 0 ||
+          (["google_sheets", "google_analytics"].includes(platform.key) && googleOAuthConnected);
+        const canConnect = ["telegram", "gmail", "google_sheets", "google_analytics"].includes(platform.key);
+        const stateLabel = verified.length ? `${verified.length} VERIFIED` : activeConnection ? "GOOGLE CONNECTED" : accounts.length ? "SETUP REQUIRED" : canConnect ? "NOT CONNECTED" : "NOT AVAILABLE";
+        const connectionForm = platform.key === "gmail"
+          ? `<form id="gmailConnectForm" class="resource-connect-form">
+              <label>Gmail address<input name="sender_address" type="email" autocomplete="username" required value="${esc(accounts[0]?.username || "")}" placeholder="you@gmail.com"></label>
+              <label>Google app password<input name="app_password" type="password" autocomplete="new-password" required minlength="16" maxlength="19" placeholder="16-character app password"></label>
+              <small>Verified against smtp.gmail.com:587 and imap.gmail.com:993. Credentials are saved locally in backend/.env.</small>
+              <button class="btn btn-primary btn-sm" type="submit">Verify and connect</button>
+            </form>`
+          : platform.key === "google_analytics"
+            ? `<form id="googleAnalyticsConnectForm" class="resource-connect-form">
+                <label>GA4 property ID<input name="property_id" type="text" inputmode="numeric" pattern="[0-9]{1,20}" maxlength="20" required placeholder="123456789"></label>
+                <button class="btn btn-primary btn-sm" type="submit">Save GA4 property</button>
+              </form>`
+          : platform.key === "google_sheets"
+            ? `<form id="googleSheetConnectForm" class="resource-connect-form">
+                <label>Spreadsheet URL<input name="url" type="url" required placeholder="https://docs.google.com/spreadsheets/d/..."></label>
+                <button class="btn btn-primary btn-sm" type="submit">Save spreadsheet</button>
+              </form>
+              <form id="googleOAuthForm" class="resource-connect-form">
+                <b>Connect Google read-only</b>
+                <label>OAuth client ID<input name="client_id" type="text" required maxlength="500" placeholder="...apps.googleusercontent.com" autocomplete="off"></label>
+                <label>OAuth client secret<input name="client_secret" type="password" required maxlength="500" autocomplete="new-password"></label>
+                <small>Create a Google Cloud OAuth client of type Web application. Add this exact redirect URI: <code>http://localhost:8000/api/resources/google-oauth/callback</code>. Credentials are stored in the local backend .env and never returned to the browser.</small>
+                <button class="btn btn-primary btn-sm" type="submit">Save and authorize Google</button>
+                ${state.accounts.some((account) => account.platform === "google_oauth" && account.verified)
+                  ? `<button class="btn btn-outline btn-sm" type="button" data-disconnect-google-oauth>Disconnect Google OAuth</button>` : ""}
+              </form>`
+            : "";
+        return `
+          <article class="resource-card ${activeConnection ? "connected" : ""}">
+            <div class="resource-head"><div class="r-name">${platform.icon} ${esc(platform.label)}</div>
+              <div class="r-badge ${activeConnection ? "badge-connected" : "badge-disconnected"}">${stateLabel}</div></div>
+            <div class="resource-desc">${esc(platform.hint)}</div>
+            ${platform.setup ? `<details class="resource-guide"><summary>How to connect</summary><p>${esc(platform.setup)}</p><a href="${esc(platform.setupUrl)}" target="_blank" rel="noopener noreferrer">Official setup documentation ↗</a><small>${platform.key === "gmail" ? "Inbox checks use read-only IMAP; sending always waits for your explicit approval." : ["google_sheets", "google_analytics"].includes(platform.key) ? "OAuth credentials are stored locally; Google access is read-only." : "No active connector exists for this provider. Do not paste passwords, API keys, or OAuth secrets here."}</small></details>` : ""}
+            ${accounts.map((account) => `
+              <div class="resource-account-row"><span><b>${esc(account.username)}</b><small>${account.status === "connected" && account.verified
+                ? esc(account.notes || "Verified")
+                : platform.key === "google_sheets"
+                  ? "URL saved. Connect Google OAuth to read this sheet."
+                  : platform.key === "google_analytics"
+                    ? "Property saved. Connect Google OAuth to read Analytics."
+                    : esc(account.notes || "Not authenticated")}</small></span>
+                ${platform.key === "google_sheets" ? `<button class="btn btn-outline btn-sm" data-read-google-sheet="${esc(account.id)}">Read sample</button>` : ""}
+                ${platform.key === "google_analytics" ? `<button class="btn btn-outline btn-sm" data-read-google-analytics="${esc(account.id)}">Read 30-day report</button>` : ""}
+                <button class="btn btn-outline btn-sm" data-disconnect="${esc(account.id)}">Remove</button></div>
+                ${platform.key === "google_sheets" && state.googleSheetValues[account.id]
+                  ? `<div class="google-sheet-preview">${googleSheetPreviewHtml(state.googleSheetValues[account.id])}</div>` : ""}
+                ${platform.key === "google_analytics" && state.googleAnalyticsReports[account.id]
+                  ? `<div class="google-sheet-preview">${googleAnalyticsReportHtml(state.googleAnalyticsReports[account.id])}</div>` : ""}`).join("")}
+            ${platform.key === "gmail" && verified.length ? `
+              <form id="emailDraftForm" class="resource-connect-form">
+                <label>Recipient<input name="recipient" type="email" required placeholder="recipient@example.com"></label>
+                <label>Subject<input name="subject" type="text" maxlength="250" required placeholder="Email subject"></label>
+                <label>Message<textarea name="body" rows="5" maxlength="30000" required placeholder="Review your message before saving it as a draft"></textarea></label>
+                <button class="btn btn-primary btn-sm" type="submit">Save email draft</button>
+              </form>
+              <section class="email-inbox-section">
+                <div class="email-inbox-heading"><b>Inbox</b><button class="btn btn-outline btn-sm" data-refresh-email-inbox>Check inbox</button></div>
+                <div class="email-inbox-list">${state.emailInbox.map((message, index) => `
+                  <article class="email-inbox-card">
+                    <div><b>${esc(message.subject || "(no subject)")}</b><small>From: ${esc(message.from_name ? `${message.from_name} <${message.from_address}>` : message.from_address)} · ${esc(message.date)}</small></div>
+                    <p>${esc(message.snippet || "(No text preview available)")}</p>
+                    ${message.from_address ? `<button class="btn btn-outline btn-sm" data-email-reply="${index}">Prepare reply draft</button>` : ""}
+                  </article>`).join("") || `<div class="resource-setup-note">Inbox is not loaded. Checking uses read-only IMAP and does not mark messages as read.</div>`}</div>
+              </section>
+              <div class="email-draft-list">${state.emails.map((email) => `
+                <article class="email-draft-card">
+                  <div><b>${esc(email.subject)}</b><small>To: ${esc(email.recipient)} · ${esc(email.status)}</small></div>
+                  <details><summary>Review message</summary><p>${esc(email.body)}</p></details>
+                  ${email.result ? `<small>${esc(email.result)}</small>` : ""}
+                  ${email.status === "draft" ? `<button class="btn btn-primary btn-sm" data-send-email="${esc(email.id)}">Send this email</button>` : ""}
+                </article>`).join("") || `<div class="resource-setup-note">No email drafts saved.</div>`}</div>` : ""}
+            <div class="resource-actions">${canConnect
+              ? (platform.key === "telegram" ? `<button class="btn btn-primary btn-sm" data-connect="telegram">+ Connect bot</button>` : connectionForm)
+              : `<span class="resource-unavailable">Connector unavailable</span>`}</div>
+          </article>`;
+      }).join("")}
+    </div>
+
+    <section class="resource-posts surface-panel">
+      <div class="panel-heading"><div><div class="eyebrow">CONTENT STUDIO</div><h3>Prepare a Telegram post</h3></div></div>
+      <p class="resource-desc">Ask the Content Creation agent to draft copy and hashtags, then add it here. Nothing is sent until you explicitly approve the draft.</p>
+      ${connectedTelegram.length ? `
+        <form id="postDraftForm" class="post-draft-form">
+          <label>Bot and destination<select id="postAccount" required>${connectedTelegram.map((account) => `<option value="${esc(account.id)}">${esc(account.username)}</option>`).join("")}</select></label>
+          <label>Post text<textarea id="postCaption" rows="4" maxlength="4000" required placeholder="Paste or adapt the agent's reviewed draft"></textarea></label>
+          <label>Hashtags<input id="postHashtags" maxlength="1000" placeholder="#yourbrand #yourtopic"></label>
+          <label>Public image URL (optional)<input id="postMediaUrl" type="url" placeholder="https://your-public-host/image.jpg"></label>
+          <button class="btn btn-primary" type="submit">Queue for my approval</button>
+        </form>` : `<div class="resource-setup-note">Connect and verify a Telegram bot to prepare a post. The bot must have permission to publish to the selected chat or channel.</div>`}
+      <div class="content-post-list">
+        ${state.contentPosts.map((post) => `
+          <article class="content-post-card">
+            <div class="content-post-top"><b>${esc(post.account_name)} | ${esc(post.platform)}</b><span class="suggestion-state state-${esc(post.status)}">${esc(post.status.replace("_", " "))}</span></div>
+            <p>${esc(post.caption)}${post.hashtags ? `<br>${esc(post.hashtags)}` : ""}</p>
+            ${post.result ? `<small>${esc(post.result)}</small>` : ""}
+            ${post.status === "pending_approval" ? `<button class="btn btn-primary btn-sm" data-approve-content="${esc(post.id)}">Approve & publish</button>` : ""}
+          </article>`).join("") || `<div class="empty-state">No posts are queued.</div>`}
+      </div>
+    </section>
+  `;
+
+  const form = document.getElementById("postDraftForm");
+  if (form) form.addEventListener("submit", createContentPost);
+  const gmailForm = document.getElementById("gmailConnectForm");
+  if (gmailForm) gmailForm.addEventListener("submit", connectGmail);
+  const sheetForm = document.getElementById("googleSheetConnectForm");
+  if (sheetForm) sheetForm.addEventListener("submit", saveGoogleSheet);
+  const googleOAuthForm = document.getElementById("googleOAuthForm");
+  if (googleOAuthForm) googleOAuthForm.addEventListener("submit", connectGoogleOAuth);
+  const googleAnalyticsForm = document.getElementById("googleAnalyticsConnectForm");
+  if (googleAnalyticsForm) googleAnalyticsForm.addEventListener("submit", saveGoogleAnalyticsProperty);
+  const emailForm = document.getElementById("emailDraftForm");
+  if (emailForm) emailForm.addEventListener("submit", saveEmailDraft);
+}
+
+async function refreshEmailInbox() {
+  const button = document.querySelector("[data-refresh-email-inbox]");
+  if (button) button.disabled = true;
+  try {
+  const inbox = await fetchJson("/api/emails/inbox?limit=20");
+  state.emailInbox = inbox.messages || [];
+  renderActiveTab(false);
+  notify(`Loaded ${state.emailInbox.length} inbox message(s) in read-only mode.`, "success");
+  } catch (error) {
+  notify("Could not check Gmail inbox: " + error.message, "error");
+  } finally {
+  const currentButton = document.querySelector("[data-refresh-email-inbox]");
+  if (currentButton) currentButton.disabled = false;
+  }
+}
+
+async function connectGmail(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const senderAddress = form.elements.sender_address.value.trim();
+  const appPassword = form.elements.app_password.value;
+  form.elements.app_password.value = "";
+  const button = form.querySelector("button[type=submit]");
+  if (button) button.disabled = true;
+  try {
+    await fetchJson("/api/resources/gmail/connect", {
+      method: "POST",
+      body: { sender_address: senderAddress, app_password: appPassword },
+    });
+    notify("Gmail SMTP and IMAP verified and connected", "success");
+    await loadAll();
+    renderActiveTab(false);
+  } catch (error) {
+    notify("Could not connect Gmail: " + error.message, "error");
+    if (button) button.disabled = false;
+  }
+}
+
+async function saveGoogleSheet(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const url = form.elements.url.value.trim();
+  const button = form.querySelector("button[type=submit]");
+  if (button) button.disabled = true;
+  try {
+    await fetchJson("/api/resources/google-sheets/connect", {
+      method: "POST",
+      body: { url },
+    });
+    notify("Spreadsheet saved. Google authorization is still required for access.", "success");
+    await loadAll();
+    renderActiveTab(false);
+  } catch (error) {
+    notify("Could not save spreadsheet: " + error.message, "error");
+    if (button) button.disabled = false;
+  }
+}
+
+async function connectGoogleOAuth(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const clientId = form.elements.client_id.value.trim();
+  const clientSecret = form.elements.client_secret.value;
+  form.elements.client_secret.value = "";
+  const button = form.querySelector("button[type=submit]");
+  if (button) button.disabled = true;
+  try {
+    const result = await fetchJson("/api/resources/google-oauth/start", {
+      method: "POST",
+      body: { client_id: clientId, client_secret: clientSecret },
+    });
+    window.location.assign(result.authorization_url);
+  } catch (error) {
+    notify("Could not start Google authorization: " + error.message, "error");
+    if (button) button.disabled = false;
+  }
+}
+
+function googleSheetPreviewHtml(values) {
+  if (!Array.isArray(values) || !values.length) {
+    return `<div class="resource-setup-note">The selected range contains no values.</div>`;
+  }
+  const rows = values.slice(0, 20);
+  return `<div class="google-sheet-preview-scroll"><table><tbody>${rows.map((row) => `
+    <tr>${(Array.isArray(row) ? row : []).slice(0, 10).map((cell) => `<td>${esc(String(cell ?? ""))}</td>`).join("")}</tr>
+  `).join("")}</tbody></table></div><small>Read-only sample · up to 20 rows and 10 columns</small>`;
+}
+
+async function readGoogleSheetSample(accountId) {
+  try {
+    const result = await fetchJson(`/api/resources/google-sheets/${encodeURIComponent(accountId)}/values?cell_range=A1%3AJ20`);
+    state.googleSheetValues[accountId] = result.values || [];
+    renderActiveTab(false);
+    notify(`Read ${state.googleSheetValues[accountId].length} row(s) from the spreadsheet.`, "success");
+  } catch (error) {
+    notify("Could not read spreadsheet: " + error.message, "error");
+  }
+}
+
+async function saveGoogleAnalyticsProperty(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const propertyId = form.elements.property_id.value.trim();
+  try {
+    await fetchJson("/api/resources/google-analytics/connect", {
+      method: "POST",
+      body: { property_id: propertyId },
+    });
+    form.reset();
+    await loadAll();
+    renderActiveTab(false);
+    notify("GA4 property saved. Read-only reporting requires Google OAuth and Analytics API access.", "success");
+  } catch (error) {
+    notify("Could not save GA4 property: " + error.message, "error");
+  }
+}
+
+function googleAnalyticsReportHtml(report) {
+  const headers = [
+    ...(report.dimension_headers || []).map((header) => header.name),
+    ...(report.metric_headers || []).map((header) => header.name),
+  ];
+  const rows = report.rows || [];
+  if (!rows.length) return `<div class="resource-setup-note">No Analytics data was returned for the last 30 days.</div>`;
+  return `<div class="google-sheet-preview-scroll"><table><thead><tr>${headers.map((header) => `<th>${esc(header)}</th>`).join("")}</tr></thead><tbody>${rows.slice(0, 30).map((row) => {
+    const cells = [
+      ...(row.dimensionValues || []).map((value) => value.value),
+      ...(row.metricValues || []).map((value) => value.value),
+    ];
+    return `<tr>${cells.map((cell) => `<td>${esc(cell || "")}</td>`).join("")}</tr>`;
+  }).join("")}</tbody></table></div><small>Read-only · last 30 days</small>`;
+}
+
+async function readGoogleAnalyticsReport(accountId) {
+  try {
+    state.googleAnalyticsReports[accountId] = await fetchJson(
+      `/api/resources/google-analytics/${encodeURIComponent(accountId)}/report`,
+    );
+    renderActiveTab(false);
+    notify("Google Analytics report loaded.", "success");
+  } catch (error) {
+    notify("Could not read Google Analytics: " + error.message, "error");
+  }
+}
+
+async function saveEmailDraft(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const payload = {
+    recipient: form.elements.recipient.value.trim(),
+    subject: form.elements.subject.value.trim(),
+    body: form.elements.body.value,
+  };
+  try {
+    await fetchJson("/api/emails", { method: "POST", body: payload });
+    form.reset();
+    notify("Email draft saved. Review it before sending.", "success");
+    await loadAll();
+    renderActiveTab(false);
+  } catch (error) {
+    notify("Could not save email draft: " + error.message, "error");
+  }
+}
+
+async function sendEmailDraft(emailId) {
+  const email = state.emails.find((item) => item.id === emailId);
+  if (!email || email.status !== "draft") return;
+  if (!confirm(`Send this email to ${email.recipient} with subject "${email.subject}"? This sends one email now.`)) return;
+  try {
+    await fetchJson(`/api/emails/${encodeURIComponent(emailId)}/send`, { method: "POST", body: {} });
+    notify("Gmail accepted the email for delivery.", "success");
+    await loadAll();
+    renderActiveTab(false);
+  } catch (error) {
+    notify("Email was not confirmed as sent: " + error.message, "error");
+    await loadAll();
+    renderActiveTab(false);
+  }
+}
+
+async function connectResource(platform) {
+  if (platform !== "telegram") {
+    notify("This provider connector is not available yet; no account was marked connected.", "error");
+    return;
+  }
+  const botToken = prompt("Paste the Telegram bot token from BotFather. It will be sent to the local backend and never displayed again:");
+  if (!botToken) return;
+  const chatId = prompt("Enter the target Telegram chat or channel ID. The bot must have posting permission:");
+  if (!chatId) return;
+  try {
+    await fetchJson("/api/resources/telegram/connect", { method: "POST", body: { bot_token: botToken, chat_id: chatId } });
+    notify("Telegram bot verified and connected", "success");
+    await loadAll();
+    renderActiveTab(false);
+  } catch (e) {
+    notify("Telegram verification failed: " + e.message, "error");
+  }
+}
+
+async function disconnectResource(accountId) {
+  const account = state.accounts.find((entry) => entry.id === accountId);
+  if (!account || !confirm(`Remove ${account.username}? Pending posts for this account will also be deleted.`)) return;
+  try {
+    await fetchJson("/api/accounts/" + accountId, { method: "DELETE" });
+    notify(`${account.username} removed`, "info");
+    await loadAll();
+    renderActiveTab(false);
+  } catch (e) {
+    notify("Could not remove account: " + e.message, "error");
+  }
+}
+
+async function createContentPost(event) {
+  event.preventDefault();
+  const body = {
+    account_id: document.getElementById("postAccount").value,
+    caption: document.getElementById("postCaption").value.trim(),
+    hashtags: document.getElementById("postHashtags").value.trim(),
+    media_url: document.getElementById("postMediaUrl").value.trim(),
+  };
+  try {
+    await fetchJson("/api/content-posts", { method: "POST", body });
+    notify("Draft queued. Review it before publishing.", "success");
+    await loadAll();
+    renderActiveTab(false);
+  } catch (e) {
+    notify("Could not queue post: " + e.message, "error");
+  }
+}
+
+async function approveContentPost(postId) {
+  if (!confirm("Publish this Telegram post now? This action sends it to the connected chat/channel.")) return;
+  try {
+    await fetchJson(`/api/content-posts/${postId}/approve`, { method: "POST", body: {} });
+    notify("Approved post published", "success");
+    await loadAll();
+    renderActiveTab(false);
+  } catch (e) {
+    notify("Post was not published: " + e.message, "error");
+    await loadAll();
+    renderActiveTab(false);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Files                                                               */
+/* ------------------------------------------------------------------ */
+
+function renderFiles() {
+  const userFiles = state.files.filter((file) => file.origin === "user" || !file.origin);
+  const teamFiles = state.files.filter((file) => file.origin && file.origin !== "user");
+  const fileCard = (file) => `
+    <div class="file-item">
+      <div class="file-info">
+        <div class="file-name">${esc(file.original_name)}</div>
+        <div class="file-meta"><span class="mime-badge">${esc(file.mime_type)}</span> • ${formatBytes(file.size)}${file.compressed ? ` • Compressed locally to ${formatBytes(file.stored_size)}` : ""} • ${file.origin === "user" ? "Uploaded by you" : `Created by ${esc(file.agent_name || file.uploaded_by || "team")}`}</div>
+        ${file.task_title ? `<div class="file-meta">Task: ${esc(file.task_title)}${file.task_id ? ` · ${esc(file.task_id)}` : ""}</div>` : ""}
+        ${file.task_id ? `<div class="file-meta">Created ${new Date(file.created_at).toLocaleDateString()}</div>` : ""}
+      </div>
+      <div class="file-actions">
+        <button class="btn btn-outline btn-sm" data-download-file="${esc(file.id)}">⬇ Download</button>
+        <button class="btn btn-outline btn-sm" data-delete-file="${esc(file.id)}" data-file-name="${esc(file.original_name)}">🗑 Delete</button>
+      </div>
+    </div>`;
+  document.getElementById("content").innerHTML = `
+    <div class="section">
+      <div class="section-title">📁 Shared files</div>
+      <p class="files-intro">Agent deliverables are saved automatically using task, agent, status, and date in the filename. The dashboard shows only the latest five completed tasks.</p>
+      <div class="file-upload-zone" id="fileDropZone">
+        <div style="font-weight:700;margin-bottom:6px;">Upload a file (Excel, PPT, Word, PDF, image, video, text)</div>
+        <input type="file" id="fileUploadInput" multiple>
+        <label for="fileUploadInput" class="btn btn-primary btn-sm" style="display:inline-flex;margin-top:8px;">Browse files</label>
+        <div style="margin-top:8px;font-size:12px;color:var(--muted);">Drag files here or click to browse. Files are stored locally and shown to the team.</div>
+      </div>
+      <section class="files-group">
+        <div class="section-title mt-8">Uploaded by you <span class="files-count">${userFiles.length}</span></div>
+        <div class="file-list">${userFiles.map(fileCard).join("") || "<div class='empty-state'>Files you upload will be stored here.</div>"}</div>
+      </section>
+      <section class="files-group">
+        <div class="section-title mt-8">Created by agents and team <span class="files-count">${teamFiles.length}</span></div>
+        <div class="file-list">${teamFiles.map(fileCard).join("") || "<div class='empty-state'>Completed agent outputs and generated reports will appear here.</div>"}</div>
+      </section>
+    </div>
+  `;
+
+  const input = document.getElementById("fileUploadInput");
+  if (input) input.addEventListener("change", (e) => uploadFiles(e.target.files));
+
+  const zone = document.getElementById("fileDropZone");
+  if (zone) {
+    zone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      zone.classList.add("drag-over");
+    });
+    zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
+    zone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      zone.classList.remove("drag-over");
+      if (e.dataTransfer && e.dataTransfer.files) uploadFiles(e.dataTransfer.files);
+    });
+  }
+}
+
+async function uploadFiles(fileList) {
+  if (!fileList || !fileList.length) return;
+  try {
+    for (const file of Array.from(fileList)) {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("uploaded_by", "user");
+      await fetchJson("/api/files/upload", { method: "POST", body: fd });
+    }
+    notify(`${fileList.length} file(s) uploaded`, "success");
+    await loadAll();
+    renderActiveTab(false);
+  } catch (e) {
+    notify("Upload failed: " + e.message, "error");
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Reports                                                             */
+/* ------------------------------------------------------------------ */
+
+function renderReports() {
+  document.getElementById("content").innerHTML = `
+    <section class="reports-hero">
+      <div><div class="eyebrow">TEAM BRIEFING</div><h2>Work, told by the team.</h2>
+        <p>Play an interactive recap built from saved tasks and agent outputs, or download a visual PDF summary.</p></div>
+      <button class="btn btn-primary" id="btnGenReport">✦ Create a team recap</button>
+    </section>
+    <div class="report-list">
+      <div class="panel-heading"><div><div class="eyebrow">ARCHIVE</div><h3>Past briefings</h3></div></div>
+      <div class="report-grid">
+        ${state.weeklyReports.map((r) => `
+          <article class="report-card">
+            <div class="report-info">
+              <div class="report-title">Team recap · ${esc(r.week_start)} — ${esc(r.week_end)}</div>
+              <div class="report-meta">Generated ${new Date(r.generated_at).toLocaleString()}</div>
+            </div>
+            <div class="report-actions">
+              <button class="btn btn-primary btn-sm" data-play-report="${esc(r.id)}">▶ Play recap</button>
+              <button class="btn btn-outline btn-sm" data-download-report="${esc(r.id)}">⬇ Download PDF</button>
+            </div>
+          </article>`).join("") || "<div class='empty-state'>No reports yet. Create a recap to see an agent-by-agent story grounded in saved work.</div>"}
+      </div>
+    </div>
+  `;
+
+  const btn = document.getElementById("btnGenReport");
+  if (btn) btn.addEventListener("click", generateReport);
+}
+
+async function generateReport() {
+  const btn = document.getElementById("btnGenReport");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "⏳ Generating…";
+  }
+  try {
+    const res = await fetchJson("/api/weekly-reports/generate", { method: "POST", body: {} });
+    await loadAll();
+    renderActiveTab(false);
+    notify("Team recap created", "success");
+    if (res && res.data) openReportPlayer(res.data);
+  } catch (e) {
+    notify("Team recap failed: " + e.message, "error");
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "✦ Create a team recap";
+    }
+  }
+}
+
+function reportStatusChart(counts) {
+  const entries = [
+    ["Done", "done", "#45b993"], ["To do", "assigned", "#8092ff"],
+    ["In progress", "in_progress", "#8d72f7"],
+    ["Waiting for Engineering", "waiting_engineering", "#3b82f6"],
+    ["Review", "review", "#f0ac51"], ["Backlog", "backlog", "#a9b5cb"],
+    ["Blocked", "blocked", "#e27668"],
+  ];
+  const max = Math.max(1, ...entries.map(([, key]) => Number(counts[key] || 0)));
+  return `<div class="recap-chart">${entries.map(([label, key, color]) => {
+    const count = Number(counts[key] || 0);
+    return `<div class="recap-chart-row"><span>${label}</span><div><i style="--bar:${color};--value:${Math.max(count ? 6 : 0, count / max * 100)}%"></i></div><b>${count}</b></div>`;
+  }).join("")}</div>`;
+}
+
+const REPORT_VOICE_PROFILES = {
+  "Chief Executive Officer": { preferred: ["en-US"], hints: ["david", "guy", "male"], rate: 0.88, pitch: 0.78, style: "American male, low pitch" },
+  "Lead Generation": { preferred: ["en-GB"], hints: ["female", "serena", "kate"], rate: 0.96, pitch: 1.08, style: "British English female" },
+  "Search Engine Optimization": { preferred: ["en-IN", "en-US"], hints: ["male", "rishi"], rate: 0.96, pitch: 0.92, style: "Indian-American English male" },
+  "Data Scraping": { preferred: ["en-IN"], hints: ["male", "rishi"], rate: 0.94, pitch: 0.9, style: "North Indian English male" },
+  "LinkedIn Data Scraping": { preferred: ["en-IN"], hints: ["female", "heera"], rate: 0.96, pitch: 1.06, style: "North Indian English female" },
+  "Email Sender & Receiver": { preferred: ["en-US"], hints: ["chinese", "female", "mei"], rate: 0.94, pitch: 1, style: "Chinese-American English" },
+  "Software Engineering": { preferred: ["en-IN", "en-US"], hints: ["male", "rishi"], rate: 0.95, pitch: 0.92, style: "Indian-American English male" },
+  "Content Creation": { preferred: ["en-FR", "en-GB", "en-US"], hints: ["french", "female"], rate: 0.95, pitch: 1.08, style: "French-accented English female" },
+};
+
+function agentProgressChart(agent) {
+  const counts = [
+    ["Completed", Number(agent.completed_count || 0), "#45b993"],
+    ["In review", (agent.weekly_tasks || []).filter((task) => task.status === "review").length, "#f0ac51"],
+    ["Active", (agent.active_tasks || []).filter((task) => task.status !== "blocked").length, "#8092ff"],
+    ["Blocked", (agent.active_tasks || []).filter((task) => task.status === "blocked").length, "#e27668"],
+  ];
+  const max = Math.max(1, ...counts.map(([, count]) => count));
+  return `<div class="recap-chart">${counts.map(([label, count, color]) => `
+    <div class="recap-chart-row"><span>${label}</span><div><i style="--bar:${color};--value:${Math.max(count ? 6 : 0, count / max * 100)}%"></i></div><b>${count}</b></div>
+  `).join("")}</div>`;
+}
+
+function selectReportVoice(role, utterance, requestedVoice = "") {
+  const profile = REPORT_VOICE_PROFILES[role] || REPORT_VOICE_PROFILES["Chief Executive Officer"];
+  utterance.rate = profile.rate;
+  utterance.pitch = profile.pitch;
+  utterance.lang = profile.preferred[0];
+  if (!("speechSynthesis" in window)) return "";
+  const voices = window.speechSynthesis.getVoices();
+  if (requestedVoice) {
+    const requested = voices.find((voice) => voice.name.toLowerCase() === requestedVoice.toLowerCase());
+    if (requested) {
+      utterance.voice = requested;
+      utterance.lang = requested.lang;
+      return requested.name;
+    }
+  }
+  for (const language of profile.preferred) {
+    const candidates = voices.filter((voice) => voice.lang.toLowerCase().startsWith(language.toLowerCase()));
+    const hinted = candidates.find((voice) => profile.hints.some((hint) => voice.name.toLowerCase().includes(hint)));
+    if (hinted || candidates[0]) {
+      utterance.voice = hinted || candidates[0];
+      utterance.lang = utterance.voice.lang;
+      return utterance.voice.name;
+    }
+  }
+  return "";
+}
+
+function renderReportSlide() {
+  const data = state.reportPlayerData;
+  const player = document.getElementById("reportPlayer");
+  if (!data || !player) return;
+  const agents = data.agents || [];
+  const totals = data.status_counts || {};
+  const totalSlides = agents.length * 3 + 1;
+  const index = Math.min(state.reportPlayerIndex, totalSlides - 1);
+  const agentIndex = index > 0 ? Math.floor((index - 1) / 3) : -1;
+  const agentTab = index > 0 ? (index - 1) % 3 : 0;
+  const agent = agentIndex >= 0 ? agents[agentIndex] : null;
+  const stage = player.querySelector(".recap-stage");
+  const progress = player.querySelector(".recap-progress i");
+  const slideCount = player.querySelector(".recap-slide-count");
+  if (!stage) return;
+  if (index === 0) {
+    stage.innerHTML = `
+      <div class="recap-kicker">WEEKLY TEAM RECAP</div>
+      <h2>A week of work,<br><em>in focus.</em></h2>
+      <p class="recap-period">${esc(data.week_start)} — ${esc(data.week_end)}</p>
+      <div class="recap-metrics"><span><b>${Number(data.weekly_completed_count || 0)}</b>completed this week</span><span><b>${agents.length}</b>agents</span><span><b>${(data.highlights || []).length}</b>recorded updates</span></div>
+      <div class="recap-chart-title">CURRENT TASK PIPELINE</div>
+      ${reportStatusChart(totals)}
+    `;
+  } else {
+    const tabNames = ["Task summary", "Progress", "Next actions"];
+    const taskSummary = agent.task_summary || agent.narration || "No written update is available for this agent.";
+    const content = agentTab === 0
+      ? `<div class="recap-voice">${esc(taskSummary)}</div>
+         <div class="recap-deliveries"><b>${Number(agent.completed_count || 0)}</b> completed task${Number(agent.completed_count || 0) === 1 ? "" : "s"} this week</div>`
+      : agentTab === 1
+        ? `<div class="recap-voice">${esc(agent.progress_summary || "No progress details have been recorded.")}</div>
+           ${agentProgressChart(agent)}
+           ${(agent.weekly_tasks || []).length ? `<ul class="recap-task-list">${agent.weekly_tasks.map((task) => `<li><b>${esc(task.title)}</b><span>${esc(statusLabel(task.status))}</span></li>`).join("")}</ul>` : ""}`
+        : `<div class="recap-voice">${esc(agent.future_plan || "No future plan is recorded.")}</div>
+           ${(agent.active_tasks || []).length ? `<div class="recap-active">Open work: ${agent.active_tasks.map((task) => `${esc(task.title)} (${esc(statusLabel(task.status))})`).join(" · ")}</div>` : ""}
+           <div class="recap-next-note">Future steps reflect assigned work and recorded blockers; no unassigned work is invented.</div>`;
+    const voiceProfile = agent.voice_profile || (REPORT_VOICE_PROFILES[agent.role] || {}).style || "browser default";
+    stage.innerHTML = `
+      <div class="recap-kicker">AGENT ${String(agentIndex + 1).padStart(2, "0")} / ${String(agents.length).padStart(2, "0")} · ${esc(tabNames[agentTab].toUpperCase())}</div>
+      <div class="recap-agent-avatar">${agentIcon(agent)}</div>
+      <h2>${esc(agent.name)}</h2><p class="recap-role">${esc(agent.role)} · ${esc(agent.status.replace("_", " "))}</p>
+      <nav class="recap-agent-tabs" aria-label="${esc(agent.name)} report sections">${tabNames.map((name, tab) => `<button class="${tab === agentTab ? "active" : ""}" data-recap-tab="${tab}">${name}</button>`).join("")}</nav>
+      <div class="recap-agent-content">${content}</div>
+      <p class="recap-voice-profile">Voice profile: ${esc(voiceProfile)}</p>
+    `;
+  }
+  if (progress) progress.style.width = `${((index + 1) / totalSlides) * 100}%`;
+  if (slideCount) slideCount.textContent = `SCENE ${String(index + 1).padStart(2, "0")} / ${String(totalSlides).padStart(2, "0")}`;
+  const previous = player.querySelector("[data-recap-prev]");
+  const next = player.querySelector("[data-recap-next]");
+  if (previous) previous.disabled = index === 0;
+  if (next) next.disabled = index >= totalSlides - 1;
+  if (state.reportNarrationEnabled && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window) {
+    window.speechSynthesis.cancel();
+    const spoken = index === 0
+      ? `Team recap, ${data.week_start} through ${data.week_end}. ${data.weekly_completed_count || 0} completed tasks across ${agents.length} agents.`
+      : `${agent.name}, ${agent.role}. ${agentTab === 0 ? agent.task_summary : agentTab === 1 ? agent.progress_summary : agent.future_plan}`;
+    const utterance = new SpeechSynthesisUtterance(spoken);
+    const requestedVoice = agent ? agent.voice_profile : "";
+    const selectedVoice = selectReportVoice(
+      agent ? agent.role : "Chief Executive Officer",
+      utterance,
+      requestedVoice,
+    );
+    if (requestedVoice && selectedVoice.toLowerCase() !== requestedVoice.toLowerCase()) {
+      const voiceLabel = player.querySelector(".recap-voice-profile");
+      if (voiceLabel) {
+        voiceLabel.textContent = `Voice profile: ${requestedVoice} (not installed; using ${selectedVoice || "browser default"})`;
+      }
+    }
+    window.speechSynthesis.speak(utterance);
+  }
+}
+
+function reportVideoSlideData(data) {
+  const slides = [{
+    kicker: `TEAM RECAP · ${data.week_start} — ${data.week_end}`,
+    title: "A week of work, in focus.",
+    body: `${Number(data.weekly_completed_count || 0)} completed tasks across ${Number((data.agents || []).length)} agents.\n\n${(data.highlights || []).slice(0, 5).map((item) => `${item.agent_name}: ${item.title}`).join("\n") || "No completed task highlights were recorded."}`,
+    agent: null,
+    counts: data.status_counts || {},
+  }];
+  for (const agent of data.agents || []) {
+    slides.push({
+      kicker: `AGENT UPDATE · ${agent.role}`,
+      title: agent.name,
+      body: agent.task_summary || agent.narration || "No written task summary was recorded.",
+      agent,
+      counts: null,
+    });
+    slides.push({
+      kicker: `PROGRESS · ${agent.name}`,
+      title: "What moved forward",
+      body: agent.progress_summary || "No progress details were recorded.",
+      agent,
+      counts: null,
+    });
+    slides.push({
+      kicker: `NEXT ACTIONS · ${agent.name}`,
+      title: "What happens next",
+      body: agent.future_plan || "No next actions were recorded.",
+      agent,
+      counts: null,
+    });
+  }
+  return slides;
+}
+
+function wrapVideoText(context, text, x, y, maxWidth, lineHeight, maxLines) {
+  const lines = [];
+  for (const rawLine of String(text || "").split("\n")) {
+    if (!rawLine.trim()) {
+      lines.push("");
+      continue;
+    }
+    let line = "";
+    for (const word of rawLine.split(/\s+/)) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (context.measureText(candidate).width > maxWidth && line) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
+    }
+    if (line) lines.push(line);
+  }
+  const shown = lines.slice(0, maxLines);
+  if (lines.length > maxLines && shown.length) {
+    shown[shown.length - 1] = shown[shown.length - 1].replace(/[.…]*$/, "") + "…";
+  }
+  shown.forEach((line, index) => {
+    if (line) context.fillText(line, x, y + index * lineHeight);
+  });
+}
+
+function drawReportVideoSlide(context, slide, index, total) {
+  const gradient = context.createLinearGradient(0, 0, 1280, 720);
+  gradient.addColorStop(0, "#171d36");
+  gradient.addColorStop(1, "#353063");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 1280, 720);
+  context.fillStyle = "#b9adff";
+  context.font = "700 20px Segoe UI, sans-serif";
+  context.fillText("✦ PREEMPTION  /  TEAM RECAP", 78, 70);
+  context.fillStyle = "#aaa5ce";
+  context.font = "600 17px Segoe UI, sans-serif";
+  context.fillText(slide.kicker.toUpperCase().slice(0, 95), 80, 145);
+  context.fillStyle = "#ffffff";
+  context.font = "700 54px Segoe UI, sans-serif";
+  wrapVideoText(context, slide.title, 80, 230, 1100, 66, 2);
+  context.fillStyle = "#e3e1f3";
+  context.font = "400 27px Segoe UI, sans-serif";
+  wrapVideoText(context, slide.body, 84, 350, 1080, 42, 7);
+  if (slide.counts) {
+    const metrics = [
+      ["Done", Number(slide.counts.done || 0), "#52d1a1"],
+      ["In progress", Number(slide.counts.in_progress || 0), "#a48aff"],
+      ["Review", Number(slide.counts.review || 0), "#f2bd66"],
+      ["Blocked", Number(slide.counts.blocked || 0), "#f17e79"],
+    ];
+    const maximum = Math.max(1, ...metrics.map((metric) => metric[1]));
+    metrics.forEach(([label, count, color], row) => {
+      const y = 565 + row * 34;
+      context.fillStyle = "#d9d7e8";
+      context.font = "500 18px Segoe UI, sans-serif";
+      context.fillText(label, 800, y);
+      context.fillStyle = "#545170";
+      context.fillRect(970, y - 17, 200, 15);
+      context.fillStyle = color;
+      context.fillRect(970, y - 17, 200 * count / maximum, 15);
+      context.fillStyle = "#ffffff";
+      context.fillText(String(count), 1185, y);
+    });
+  }
+  context.fillStyle = "#aaa5ce";
+  context.font = "500 16px Segoe UI, sans-serif";
+  context.fillText("Captioned report video · narration is available in the interactive player", 80, 674);
+  context.textAlign = "right";
+  context.fillText(`${index + 1} / ${total}`, 1200, 674);
+  context.textAlign = "left";
+}
+
+async function exportReportVideo(button) {
+  if (!state.reportPlayerData) return;
+  if (!("MediaRecorder" in window) || !HTMLCanvasElement.prototype.captureStream) {
+    notify("Video recording is not supported in this browser. Use the narrated recap or download the PDF.", "error");
+    return;
+  }
+  const supportedType = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"]
+    .find((type) => MediaRecorder.isTypeSupported(type));
+  if (!supportedType) {
+    notify("This browser cannot encode a WebM report video. Use the narrated recap or download the PDF.", "error");
+    return;
+  }
+  if (state.reportPlayerTimer) clearInterval(state.reportPlayerTimer);
+  state.reportPlayerTimer = null;
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  const autoplayButton = document.querySelector("#reportPlayer [data-recap-toggle]");
+  if (autoplayButton) autoplayButton.textContent = "Play";
+  button.disabled = true;
+  button.textContent = "Recording…";
+  const canvas = document.createElement("canvas");
+  canvas.width = 1280;
+  canvas.height = 720;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    button.disabled = false;
+    button.textContent = "Export video";
+    notify("Could not initialize the report video canvas.", "error");
+    return;
+  }
+  const stream = canvas.captureStream(24);
+  const chunks = [];
+  const recorder = new MediaRecorder(stream, { mimeType: supportedType });
+  const finished = new Promise((resolve, reject) => {
+    recorder.ondataavailable = (event) => {
+      if (event.data.size) chunks.push(event.data);
+    };
+    recorder.onerror = () => reject(new Error("The browser stopped recording the report."));
+    recorder.onstop = resolve;
+  });
+  try {
+    recorder.start(250);
+    const slides = reportVideoSlideData(state.reportPlayerData);
+    for (let index = 0; index < slides.length; index += 1) {
+      drawReportVideoSlide(context, slides[index], index, slides.length);
+      button.textContent = `Recording ${index + 1}/${slides.length}…`;
+      await new Promise((resolve) => window.setTimeout(resolve, 1800));
+    }
+    recorder.stop();
+    await finished;
+    const blob = new Blob(chunks, { type: supportedType });
+    if (!blob.size) throw new Error("The browser returned an empty video.");
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `team-recap-${state.reportPlayerData.week_start || "report"}.webm`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+    notify(`Captioned team recap video exported (${formatBytes(blob.size)}).`, "success");
+  } catch (error) {
+    if (recorder.state !== "inactive") recorder.stop();
+    notify("Could not export team recap video: " + error.message, "error");
+  } finally {
+    stream.getTracks().forEach((track) => track.stop());
+    button.disabled = false;
+    button.textContent = "Export video";
+  }
+}
+
+function openReportPlayer(data) {
+  closeReportPlayer();
+  state.reportPlayerData = data;
+  state.reportPlayerIndex = 0;
+  state.reportNarrationEnabled = false;
+  const player = document.createElement("section");
+  player.id = "reportPlayer";
+  player.className = "report-player";
+  player.setAttribute("role", "dialog");
+  player.setAttribute("aria-modal", "true");
+  player.setAttribute("aria-label", "Team recap presentation");
+  player.setAttribute("tabindex", "-1");
+  player.innerHTML = `
+    <div class="recap-frame">
+      <header class="recap-top"><span class="recap-brand">✦ PREEMPTION <span>TEAM RECAP</span></span><span class="recap-slide-count"></span><button class="icon-btn" data-recap-close aria-label="Close recap">×</button></header>
+      <div class="recap-progress"><i></i></div>
+      <main class="recap-stage"></main>
+      <footer class="recap-controls"><button class="btn btn-outline" data-recap-prev>← Previous</button><div><button class="btn btn-outline" data-recap-export>Export video</button><button class="btn btn-outline" data-recap-voice>Enable voice</button><button class="btn btn-outline" data-recap-toggle>Pause</button></div><button class="btn btn-primary" data-recap-next>Next →</button></footer>
+      <p class="recap-disclaimer">Video exports are captioned WebM slides without embedded audio; enable voice in the interactive player. Report content reflects recorded work only.</p>
+    </div>`;
+  document.body.appendChild(player);
+  player.addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    if (button.hasAttribute("data-recap-close")) {
+      closeReportPlayer();
+    } else if (button.hasAttribute("data-recap-tab")) {
+      const currentIndex = state.reportPlayerIndex;
+      const currentAgent = Math.floor((currentIndex - 1) / 3);
+      state.reportPlayerIndex = 1 + currentAgent * 3 + Number(button.dataset.recapTab);
+      renderReportSlide();
+    } else if (button.hasAttribute("data-recap-prev")) {
+      state.reportPlayerIndex = Math.max(0, state.reportPlayerIndex - 1);
+      renderReportSlide();
+    } else if (button.hasAttribute("data-recap-next")) {
+      state.reportPlayerIndex = Math.min(1 + (state.reportPlayerData.agents || []).length * 3 - 1, state.reportPlayerIndex + 1);
+      renderReportSlide();
+    } else if (button.hasAttribute("data-recap-voice")) {
+      state.reportNarrationEnabled = !state.reportNarrationEnabled;
+      button.textContent = state.reportNarrationEnabled ? "Voice on" : "Enable voice";
+      renderReportSlide();
+    } else if (button.hasAttribute("data-recap-export")) {
+      exportReportVideo(button);
+    } else if (button.hasAttribute("data-recap-toggle")) {
+      if (state.reportPlayerTimer) {
+        clearInterval(state.reportPlayerTimer);
+        state.reportPlayerTimer = null;
+        button.textContent = "Play";
+      } else {
+        if (state.reportPlayerIndex >= 1 + (state.reportPlayerData.agents || []).length * 3) state.reportPlayerIndex = 0;
+        renderReportSlide();
+        startReportAutoplay(button);
+      }
+    }
+  });
+  player.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeReportPlayer();
+    if (event.key === "ArrowRight") {
+      state.reportPlayerIndex = Math.min(1 + (state.reportPlayerData.agents || []).length * 3 - 1, state.reportPlayerIndex + 1);
+      renderReportSlide();
+    }
+    if (event.key === "ArrowLeft") {
+      state.reportPlayerIndex = Math.max(0, state.reportPlayerIndex - 1);
+      renderReportSlide();
+    }
+  });
+  renderReportSlide();
+  startReportAutoplay(player.querySelector("[data-recap-toggle]"));
+  player.focus({ preventScroll: true });
+}
+
+function startReportAutoplay(toggle) {
+  if (state.reportPlayerTimer) clearInterval(state.reportPlayerTimer);
+  if (toggle) toggle.textContent = "Pause";
+  state.reportPlayerTimer = setInterval(() => {
+    const last = (state.reportPlayerData.agents || []).length * 3;
+    if (state.reportPlayerIndex >= last) {
+      clearInterval(state.reportPlayerTimer);
+      state.reportPlayerTimer = null;
+      const currentToggle = document.querySelector("#reportPlayer [data-recap-toggle]");
+      if (currentToggle) currentToggle.textContent = "Replay";
+      return;
+    }
+    state.reportPlayerIndex += 1;
+    renderReportSlide();
+  }, 9000);
+}
+
+function closeReportPlayer() {
+  if (state.reportPlayerTimer) clearInterval(state.reportPlayerTimer);
+  state.reportPlayerTimer = null;
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  const player = document.getElementById("reportPlayer");
+  if (player) player.remove();
+}
+
+async function playSavedReport(reportId) {
+  try {
+    const data = await fetchJson(`/api/weekly-reports/${reportId}/briefing`);
+    openReportPlayer(data);
+  } catch (e) {
+    notify("Could not open team recap: " + e.message, "error");
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Models                                                              */
+/* ------------------------------------------------------------------ */
+
+function renderModels() {
+  const r = state.modelRouter || {};
+  const models = r.models || [];
+  const active = r.selected_model || r.active_model || (models.length ? models[0] : "—");
+
+  document.getElementById("content").innerHTML = `
+    <div class="section">
+      <div class="section-title">🧠 Model Router — Automatic Failover</div>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:14px;">
+        Your agents use the provider and model selected in Configuration. If a model hits a limit,
+        the router automatically tries the next model and then any other configured provider.
+      </p>
+      <div class="card" style="max-width:760px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <div>
+            <div style="font-weight:700;">Active Model</div>
+            <div style="font-size:13px;color:var(--muted);">${esc(active)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-weight:700;font-size:13px;color:var(--primary);">${models.length ? `#${(r.index % models.length) + 1} of ${models.length}` : "No models"}</div>
+            <div style="font-size:12px;color:var(--muted);">Provider: ${esc(r.provider_label || r.provider || "—")}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-primary" id="btnSwitchModel" ${models.length ? "" : "disabled"}>🔄 Switch to Next Model</button>
+          <button class="btn btn-outline" data-goto="config">⚙️ Configure Provider</button>
+        </div>
+        <div class="router-notice" style="margin-top:12px;">
+          💡 Auto-failover is ${cfgVal("auto_failover", "1") === "0" ? "OFF" : "ON"}. Model cycling happens automatically on rate limit.
+          ${r.has_key ? "API key is configured." : "No API key is configured for this provider."}
+        </div>
+      </div>
+      <div class="section-title mt-8" style="margin-bottom:8px;">Models for ${esc(r.provider_label || r.provider || "—")} (${models.length})</div>
+      <div class="model-list">
+        ${models.map((m, i) => `
+          <div class="model-item ${m === active ? "active" : ""}">
+            <div class="m-name">${i + 1}. ${esc(m)}</div>
+            <div class="m-status ${m === active ? "m-status-active" : "m-status-inactive"}">${m === active ? "SELECTED" : "available"}</div>
+          </div>`).join("") || "<div class='empty'>No models. Configure a provider key first.</div>"}
+      </div>
+    </div>
+  `;
+
+  const btn = document.getElementById("btnSwitchModel");
+  if (btn) btn.addEventListener("click", switchModel);
+}
+
+async function switchModel() {
+  try {
+    await fetchJson("/api/model-router/switch", { method: "POST", body: {} });
+    await loadAll();
+    renderActiveTab(false);
+    notify("Switched to the next model", "success");
+  } catch (e) {
+    notify("Could not switch model: " + e.message, "error");
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Configuration                                                       */
+/* ------------------------------------------------------------------ */
+
+function renderConfig() {
+  const mr = state.modelRouter || {};
+  const provider = mr.provider || "openrouter";
+  const selectedModel = cfgVal(`${provider}_selected_model`, "");
+  const models = availableModelsFor(provider);
+  const test = state.lastTest[provider];
+
+  const providerCards = Object.keys(PROVIDER_CONFIG).map((key) => {
+    const active = key === provider;
+    const hasKey = cfgHas(`${key}_api_key`);
+    const count = availableModelsFor(key).length;
+    return `
+      <div class="provider-card ${active ? "provider-active" : ""}" data-provider="${key}">
+        <div class="provider-head">
+          <div>
+            <span class="provider-mark provider-mark-${esc(key)}" aria-hidden="true">${esc(PROVIDER_CONFIG[key].mark)}</span>
+            <div class="provider-name">${esc(providerLabel(key))}</div>
+            <div class="provider-sub">${hasKey ? `Key saved • ${count} model(s)` : "No key"}</div>
+          </div>
+          <div class="provider-badge ${active ? "badge-active" : "badge-inactive"}">${active ? "ACTIVE" : hasKey ? "KEY SAVED" : "NO KEY"}</div>
+        </div>
+        <input type="password" id="providerKey_${key}" placeholder="Paste ${esc(providerLabel(key))} API key" autocomplete="off">
+        <div class="provider-actions">
+          <button class="btn btn-outline btn-sm" data-test-provider="${key}">🔑 Test & List</button>
+          <button class="btn btn-primary btn-sm" data-save-provider="${key}">💾 Save Key</button>
+        </div>
+        <div class="provider-link"><a href="${esc(PROVIDER_CONFIG[key].site)}" target="_blank" rel="noopener">Get a key ↗</a></div>
+      </div>`;
+  }).join("");
+
+  const modelOptions = models.length
+    ? models.map((m) => `<option value="${esc(m)}" ${m === selectedModel ? "selected" : ""}>${esc(m)}</option>`).join("")
+    : `<option value="">— test your key to load models —</option>`;
+
+  document.getElementById("content").innerHTML = `
+    <div class="section">
+      <div class="section-title">Company profile</div>
+      <form id="companyProfileForm" class="card onboarding-profile-form" style="max-width:760px;">
+        <label>Your name<input name="owner_name" maxlength="100" required value="${esc(state.profile.owner_name || "")}"></label>
+        <label>Company name<input name="company_name" maxlength="100" required value="${esc(state.profile.company_name || "")}"></label>
+        <label>Business and product details<textarea name="company_description" maxlength="1200" rows="3" placeholder="Information agents may use to ground company-specific work.">${esc(state.profile.company_description || "")}</textarea></label>
+        <label>Company website<input name="company_website" type="url" maxlength="500" placeholder="https://example.com" value="${esc(state.profile.company_website || "")}"></label>
+        <button class="btn btn-primary" type="submit">Save company profile</button>
+      </form>
+    </div>
+    <div class="section">
+      <div class="section-title">⚙️ Configuration — AI Provider</div>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:16px;">
+        Click a provider card, paste its API key, click <b>Test &amp; List</b>, then choose a model and click <b>Use This Model</b>.
+        The key is stored server-side; the browser never receives it back.
+      </p>
+      <div class="router-notice" style="margin-bottom:16px;">Hermes models are available through OpenRouter. Codex CLI remains available for local project edits in Project Workspace; OpenAI Codex API is a separate cloud option.</div>
+
+      <div class="section-title" style="margin-bottom:8px;">Select Provider</div>
+      <div class="provider-grid">${providerCards}</div>
+
+      <div class="card active-provider-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
+          <div>
+            <div style="font-weight:700;">${esc(providerLabel(provider))} (${esc(provider)})</div>
+            <div style="font-size:12px;color:var(--muted);">
+              ${models.length} model(s) • Key: ${cfgHas(`${provider}_api_key`) ? "saved" : "not saved"} •
+              Auto-failover: ${cfgVal("auto_failover", "1") === "0" ? "Disabled" : "Enabled"}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-primary" data-test-provider="${provider}">🔑 Test & List Models</button>
+            <button class="btn btn-outline" data-save-provider="${provider}">💾 Save Key</button>
+            ${cfgHas(`${provider}_api_key`) ? `<button class="btn btn-outline" data-clear-key="${provider}">🗑 Clear Key</button>` : ""}
+          </div>
+        </div>
+
+        <div class="input-wrap">
+          <label>${esc(providerLabel(provider))} API key</label>
+          <input type="password" id="configApiKey" placeholder="${cfgHas(`${provider}_api_key`) ? "A key is saved — paste a new one to replace it" : "Paste your API key"}" autocomplete="off">
+          <div class="config-hint">Get a key at <a href="${esc(PROVIDER_CONFIG[provider].site)}" target="_blank" rel="noopener">${esc(providerLabel(provider))} ↗</a></div>
+        </div>
+
+        <div class="input-wrap">
+          <label>Model</label>
+          <select id="configModelSelect">${modelOptions}</select>
+        </div>
+        <button class="btn btn-primary" data-use-model="${provider}" ${models.length ? "" : "disabled"}>✅ Use This Model</button>
+
+        <div class="input-wrap" style="margin-top:14px;">
+          <label>Model Auto-Failover</label>
+          <select id="configAutoFailover">
+            <option value="1" ${cfgVal("auto_failover", "1") !== "0" ? "selected" : ""}>Enabled — switch models automatically on rate limit</option>
+            <option value="0" ${cfgVal("auto_failover", "1") === "0" ? "selected" : ""}>Disabled — use one model only</option>
+          </select>
+        </div>
+
+        <div id="configTestResult" class="test-result ${test ? "test-" + test.type : ""}">${test ? esc(test.message) : ""}</div>
+        <div class="router-notice" style="margin-top:12px;">
+          💡 Current active model: <b>${esc(selectedModel || mr.active_model || models[0] || "—")}</b>.
+          If a model hits its limit, the router automatically tries the next model, then any other configured provider.
+        </div>
+      </div>
+
+      <div class="section-title mt-8" style="margin-bottom:8px;">Available Models</div>
+      <div class="model-list">
+        ${models.map((m, i) => `
+          <div class="model-item ${m === (selectedModel || models[0]) ? "active" : ""}">
+            <div class="m-name">${i + 1}. ${esc(m)}</div>
+            <div class="m-status ${m === (selectedModel || models[0]) ? "m-status-active" : "m-status-inactive"}">${m === (selectedModel || models[0]) ? "SELECTED" : "available"}</div>
+          </div>`).join("") || "<div class='empty'>No models yet — test a provider key above.</div>"}
+      </div>
+
+      <div class="section-title mt-8" style="margin-bottom:8px;">🌐 Web Research</div>
+      <div class="card">
+        <div style="font-weight:700;">Live search for research agents</div>
+        <p style="color:var(--muted);font-size:13px;">
+          ${cfgHas("web_search_api_key")
+            ? "Research agents use the configured search option and automatically fall back to no-key public search."
+            : "Research agents use no-key public web search. No search account, API key, or paid plan is required."}
+          Public search needs an internet connection; it does not bypass login, access controls, or source-site limits.
+          Any optional provider key is stored in the ignored backend/.env file and is never returned to the browser.
+        </p>
+        <div class="input-wrap">
+          <label>Optional Tavily API key (not required)</label>
+          <input type="password" id="webSearchApiKey" autocomplete="off"
+            placeholder="${cfgHas("web_search_api_key") ? "A key is saved — paste a new one to replace it" : "Leave empty — no-key public search is ready"}">
+          <div class="config-hint">
+            Leave this optional field empty to use no-key public search. Search results are evidence candidates, not a guarantee of current or qualified profiles.
+            Fully verified LinkedIn data requires manual review or approved API access; see
+            <a href="https://learn.microsoft.com/en-us/linkedin/shared/authentication/getting-access" target="_blank" rel="noopener">LinkedIn API permissions ↗</a>
+            and <a href="https://business.linkedin.com/sales-solutions/partners/become-a-partner" target="_blank" rel="noopener">Sales Navigator partner access ↗</a>.
+          </div>
+        </div>
+        <div class="provider-actions">
+          <button class="btn btn-primary" data-test-web-search>🔎 Test Public Search / Save Optional Key</button>
+          ${cfgHas("web_search_api_key") ? `<button class="btn btn-outline" data-clear-key="web_search">🗑 Disconnect</button>` : ""}
+        </div>
+        <div id="webSearchTestResult" class="test-result"></div>
+      </div>
+    </div>
+  `;
+
+  const failover = document.getElementById("configAutoFailover");
+  const profileForm = document.getElementById("companyProfileForm");
+  if (profileForm) profileForm.addEventListener("submit", saveCompanyProfile);
+  if (failover) {
+    failover.addEventListener("change", async (e) => {
+      try {
+        await fetchJson("/api/config", { method: "POST", body: { key: "auto_failover", value: e.target.value } });
+        notify("Auto-failover updated", "success");
+        await loadAll();
+      } catch (err) {
+        notify("Could not save setting: " + err.message, "error");
+      }
+    });
+  }
+}
+
+async function saveCompanyProfile(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const payload = {
+    owner_name: form.elements.owner_name.value.trim(),
+    company_name: form.elements.company_name.value.trim(),
+    company_description: form.elements.company_description.value.trim(),
+    company_website: form.elements.company_website.value.trim(),
+  };
+  try {
+    state.profile = await fetchJson("/api/profile", { method: "POST", body: payload });
+    await loadAll();
+    renderActiveTab(false);
+    notify("Company profile saved", "success");
+  } catch (error) {
+    notify("Could not save company profile: " + error.message, "error");
+  }
+}
+
+function enteredKey(provider) {
+  const card = document.getElementById(`providerKey_${provider}`);
+  if (card && card.value.trim()) return card.value.trim();
+  if ((state.modelRouter.provider || "") === provider) {
+    const main = document.getElementById("configApiKey");
+    if (main && main.value.trim()) return main.value.trim();
+  }
+  return "";
+}
+
+function setTestResult(provider, message, type) {
+  state.lastTest[provider] = { message, type };
+  const el = document.getElementById("configTestResult");
+  if (el && (state.modelRouter.provider || "") === provider) {
+    el.textContent = message;
+    el.className = `test-result test-${type}`;
+  }
+}
+
+async function testProvider(provider) {
+  const apiKey = enteredKey(provider);
+  if (!apiKey) {
+    notify(`Paste the ${providerLabel(provider)} API key first`, "error");
+    setTestResult(provider, "Enter an API key first.", "error");
+    return;
+  }
+  setTestResult(provider, "⏳ Testing key and fetching models…", "warning");
+  try {
+    const res = await fetchJson("/api/config/test-and-list", {
+      method: "POST",
+      body: { api_key: apiKey, provider },
+    });
+    if (!res.ok) {
+      setTestResult(provider, "❌ " + res.message, "error");
+      notify(res.message, "error");
+      return;
+    }
+
+    // Only save a key after it has been proven to work.
+    await fetchJson("/api/config", { method: "POST", body: { key: `${provider}_api_key`, value: apiKey } });
+    await fetchJson("/api/config", { method: "POST", body: { key: `use_${provider}`, value: "1" } });
+    await fetchJson("/api/config/switch-provider", { method: "POST", body: { provider } });
+
+    state.availableModels[provider] = res.available_models || [];
+    setTestResult(
+      provider,
+      `✅ ${res.message}${res.tested_model ? ` Tested: ${res.tested_model}` : ""}`,
+      "success"
+    );
+
+    const card = document.getElementById(`providerKey_${provider}`);
+    if (card) card.value = "";
+    const main = document.getElementById("configApiKey");
+    if (main) main.value = "";
+
+    await loadAll();
+    renderActiveTab(false);
+    notify(`✅ ${providerLabel(provider)} connected — ${(res.available_models || []).length} model(s) loaded`, "success");
+  } catch (e) {
+    setTestResult(provider, "❌ " + e.message, "error");
+    notify("Test failed: " + e.message, "error");
+  }
+}
+
+async function saveProviderKey(provider) {
+  const apiKey = enteredKey(provider);
+  if (!apiKey) {
+    notify(`Paste the ${providerLabel(provider)} API key first`, "error");
+    return;
+  }
+  try {
+    await fetchJson("/api/config", { method: "POST", body: { key: `${provider}_api_key`, value: apiKey } });
+    await fetchJson("/api/config", { method: "POST", body: { key: `use_${provider}`, value: "1" } });
+    await fetchJson("/api/config/switch-provider", { method: "POST", body: { provider } });
+    const card = document.getElementById(`providerKey_${provider}`);
+    if (card) card.value = "";
+    const main = document.getElementById("configApiKey");
+    if (main) main.value = "";
+    await loadAll();
+    renderActiveTab(false);
+    notify(`${providerLabel(provider)} key saved. Now click Test & List Models.`, "success");
+  } catch (e) {
+    notify("Could not save key: " + e.message, "error");
+  }
+}
+
+async function clearProviderKey(provider) {
+  if (!confirm(`Remove the saved ${providerLabel(provider)} API key?`)) return;
+  try {
+    await fetchJson("/api/config", { method: "POST", body: { key: `${provider}_api_key`, value: "" } });
+    await fetchJson("/api/config", { method: "POST", body: { key: `${provider}_selected_model`, value: "" } });
+    await loadAll();
+    renderActiveTab(false);
+    notify(`${providerLabel(provider)} key removed`, "info");
+  } catch (e) {
+    notify("Could not clear key: " + e.message, "error");
+  }
+}
+
+async function useModel(provider) {
+  const select = document.getElementById("configModelSelect");
+  if (!select || !select.value) {
+    notify("Select a model first", "error");
+    return;
+  }
+  try {
+    await fetchJson("/api/config/select-model", { method: "POST", body: { provider, model: select.value } });
+    await loadAll();
+    renderActiveTab(false);
+    notify(`Now using ${select.value}`, "success");
+  } catch (e) {
+    notify("Could not select model: " + e.message, "error");
+  }
+}
+
+async function switchProvider(provider) {
+  if ((state.modelRouter.provider || "") === provider) return;
+  try {
+    await fetchJson("/api/config/switch-provider", { method: "POST", body: { provider } });
+    // Never carry a typed key across providers.
+    const main = document.getElementById("configApiKey");
+    if (main) main.value = "";
+    await loadAll();
+    renderActiveTab(false);
+  } catch (e) {
+    notify("Could not switch provider: " + e.message, "error");
+  }
+}
+
+async function testWebSearch() {
+  const input = document.getElementById("webSearchApiKey");
+  const apiKey = input ? input.value.trim() : "";
+  const result = document.getElementById("webSearchTestResult");
+  if (result) {
+    result.textContent = apiKey ? "Testing the API key with a live search…" : "Testing free keyless live search…";
+    result.className = "test-result test-warning";
+  }
+  try {
+    const response = await fetchJson("/api/research/test", {
+      method: "POST",
+      body: { api_key: apiKey },
+    });
+    if (!response.ok) throw new Error(response.message || "Search connection failed.");
+    if (apiKey) {
+      await fetchJson("/api/config", {
+        method: "POST",
+        body: { key: "web_search_api_key", value: apiKey },
+      });
+    }
+    if (result) {
+      result.textContent = "✅ " + response.message;
+      result.className = "test-result test-success";
+    }
+    input.value = "";
+    await loadAll();
+    renderActiveTab(false);
+    notify(apiKey ? "Optional search key saved; no-key fallback remains enabled" : "No-key public web search is available", "success");
+  } catch (error) {
+    if (result) {
+      result.textContent = "❌ " + error.message;
+      result.className = "test-result test-error";
+    }
+    notify("Could not connect web search: " + error.message, "error");
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Activity                                                            */
+/* ------------------------------------------------------------------ */
+
+function renderActivity() {
+  document.getElementById("content").innerHTML = `
+    <div class="section">
+      <div class="section-title">🕓 Activity Feed</div>
+      <div class="feed">
+        ${state.activity.map((a) => feedItemHtml(a)).join("") || "<div class='empty'>No activity yet.</div>"}
+      </div>
+    </div>
+  `;
+}
+
+/* ------------------------------------------------------------------ */
+/* Event wiring                                                        */
+/* ------------------------------------------------------------------ */
+
+function setupListeners() {
+  window.addEventListener("pagehide", saveLastView);
+  document.querySelectorAll(".nav-item").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      state.selectedAgentId = null;
+      goToTab(el.dataset.tab);
+    });
+  });
+
+  const refreshTop = document.getElementById("btnRefreshTop");
+  const pauseWork = document.getElementById("btnPauseWork");
+  const refreshPage = document.getElementById("btnRefresh");
+  const refresh = async () => {
+    await loadAll();
+    renderActiveTab(true);
+    renderBottomPanel();
+    renderFixedChat(true);
+    checkApprovals();
+    notify("Refreshed", "info");
+  };
+  if (refreshTop) refreshTop.addEventListener("click", refresh);
+  if (refreshPage) refreshPage.addEventListener("click", refresh);
+  if (pauseWork) pauseWork.addEventListener("click", async () => {
+    const paused = !state.operations.paused;
+    pauseWork.disabled = true;
+    try {
+      state.operations = await fetchJson("/api/operations/pause", {
+        method: "POST",
+        body: { paused },
+      });
+      renderOperationsPauseControl();
+      await loadAll();
+      renderActiveTab(true);
+      notify(
+        paused
+          ? "Queue paused. An already-running model or tool call may finish its current call."
+          : "Queue resumed.",
+        paused ? "info" : "success",
+      );
+    } catch (error) {
+      notify(`Could not ${paused ? "pause" : "resume"} work: ${error.message}`, "error");
+    } finally {
+      pauseWork.disabled = false;
+    }
+  });
+
+  const briefing = document.getElementById("btnCeoBriefing");
+  if (briefing) briefing.addEventListener("click", () => {
+    state.chatReceiver = "CEO";
+    openChat();
+    const select = document.getElementById("chatReceiverFixed");
+    const input = document.getElementById("chatInputFixed");
+    if (select) select.value = "CEO";
+    if (input) {
+      input.value = "Give me a concise briefing on current project work, blockers, and the next actions for the team.";
+      sendChat("fixed");
+    }
+  });
+  const weekly = document.getElementById("btnWeeklyReport");
+  if (weekly) weekly.addEventListener("click", async () => {
+    goToTab("reports");
+    await generateReport();
+  });
+
+  const min = document.getElementById("chatMin");
+  if (min) min.addEventListener("click", hideChat);
+  const close = document.getElementById("chatClose");
+  if (close) close.addEventListener("click", hideChat);
+  const restore = document.getElementById("chatRestoreBtn");
+  if (restore) {
+    restore.style.display = "none";
+    restore.addEventListener("click", openChat);
+  }
+
+  const content = document.getElementById("content");
+  content.addEventListener("click", async (e) => {
+    const archiveTaskButton = e.target.closest("[data-archive-task]");
+    if (archiveTaskButton) {
+      const task = state.tasks.find((item) => item.id === archiveTaskButton.getAttribute("data-archive-task"));
+      if (!task || !confirm(`Hide "${task.title}" from the task board? Its history and files will be kept.`)) return;
+      try {
+        await fetchJson(`/api/tasks/${encodeURIComponent(task.id)}`, { method: "DELETE" });
+        await loadAll();
+        if (state.showArchivedTasks) {
+          const allTasks = await fetchJson("/api/tasks?include_archived=true");
+          state.archivedTasks = allTasks.filter((item) => Boolean(item.archived_at));
+        }
+        renderActiveTab(false);
+        notify("Task hidden from the board; its history is preserved.", "success");
+      } catch (error) {
+        notify("Could not hide task: " + error.message, "error");
+      }
+      return;
+    }
+
+    const restoreTaskButton = e.target.closest("[data-restore-task]");
+    if (restoreTaskButton) {
+      const taskId = restoreTaskButton.getAttribute("data-restore-task");
+      const task = state.archivedTasks.find((item) => item.id === taskId)
+        || state.tasks.find((item) => item.id === taskId);
+      if (!task) return;
+      try {
+        await fetchJson(`/api/tasks/${encodeURIComponent(task.id)}/restore`, { method: "POST" });
+        await loadAll();
+        const allTasks = await fetchJson("/api/tasks?include_archived=true");
+        state.archivedTasks = allTasks.filter((item) => Boolean(item.archived_at));
+        renderActiveTab(false);
+        notify("Task restored to the board.", "success");
+      } catch (error) {
+        notify("Could not restore task: " + error.message, "error");
+      }
+      return;
+    }
+
+    const sendEmailButton = e.target.closest("[data-send-email]");
+    if (sendEmailButton) {
+      await sendEmailDraft(sendEmailButton.getAttribute("data-send-email"));
+      return;
+    }
+
+    const inboxButton = e.target.closest("[data-refresh-email-inbox]");
+    if (inboxButton) {
+      await refreshEmailInbox();
+      return;
+    }
+
+    const replyButton = e.target.closest("[data-email-reply]");
+    if (replyButton) {
+      const email = state.emailInbox[Number(replyButton.getAttribute("data-email-reply"))];
+      const form = document.getElementById("emailDraftForm");
+      if (!email || !form) return;
+      form.elements.recipient.value = email.from_address;
+      form.elements.subject.value = /^re:/i.test(email.subject) ? email.subject : `Re: ${email.subject}`;
+      form.elements.body.value = "";
+      form.elements.body.focus({ preventScroll: true });
+      form.scrollIntoView({ behavior: "smooth", block: "center" });
+      notify("Reply details filled in. Write and save the draft for review.", "info");
+      return;
+    }
+
+    const closeMediaPreview = e.target.closest("[data-close-media-preview]");
+    if (closeMediaPreview || e.target.id === "taskMediaPreviewOverlay") {
+      const previewOverlay = document.getElementById("taskMediaPreviewOverlay");
+      if (previewOverlay) previewOverlay.remove();
+      return;
+    }
+
+    const previewMedia = e.target.closest("[data-preview-file]");
+    if (previewMedia) {
+      openTaskMediaPreview(
+        previewMedia.getAttribute("data-preview-file"),
+        previewMedia.getAttribute("data-preview-name"),
+        previewMedia.getAttribute("data-preview-mime"),
+      );
+      return;
+    }
+
+    const closeTaskDetails = e.target.closest("[data-close-task-details]");
+    if (closeTaskDetails || e.target.id === "taskDetailsOverlay") {
+      const overlay = document.getElementById("taskDetailsOverlay");
+      if (overlay) overlay.remove();
+      saveLastView();
+      return;
+    }
+
+    const openTask = e.target.closest("[data-open-task]");
+    if (openTask) {
+      openTaskDetails(openTask.getAttribute("data-open-task"));
+      return;
+    }
+
+    const taskCard = e.target.closest(".task-card");
+    if (taskCard && !e.target.closest("button, a, summary, details, input, select")) {
+      openTaskDetails(taskCard.getAttribute("data-task-id"));
+      return;
+    }
+
+    const goto = e.target.closest("[data-goto]");
+    if (goto) {
+      goToTab(goto.dataset.goto);
+      return;
+    }
+
+    const back = e.target.closest("[data-back-team]");
+    if (back) {
+      state.selectedAgentId = null;
+      renderActiveTab(false);
+      return;
+    }
+
+    const deleteAgentButton = e.target.closest("[data-delete-agent]");
+    if (deleteAgentButton) {
+      await deleteAgent(deleteAgentButton.getAttribute("data-delete-agent"));
+      return;
+    }
+
+    const deleteScheduleButton = e.target.closest("[data-delete-schedule]");
+    if (deleteScheduleButton) {
+      const scheduleId = deleteScheduleButton.getAttribute("data-delete-schedule");
+      if (!confirm("Cancel this recurring schedule? Tasks already queued will remain on the board.")) return;
+      try {
+        await fetchJson(`/api/agent-schedules/${encodeURIComponent(scheduleId)}`, { method: "DELETE" });
+        await loadAll();
+        renderActiveTab(false);
+        notify("Recurring schedule cancelled", "success");
+      } catch (error) {
+        notify("Could not cancel schedule: " + error.message, "error");
+      }
+      return;
+    }
+
+    const chatAgent = e.target.closest("[data-chat-agent]");
+    if (chatAgent) {
+      const name = chatAgent.getAttribute("data-chat-agent");
+      state.chatReceiver = name;
+      openChat();
+      const sel = document.getElementById("chatReceiverFixed");
+      if (sel) sel.value = name;
+      notify(`Chatting with ${name}`, "info");
+      return;
+    }
+
+    const agent = e.target.closest("[data-agent-id]");
+    if (agent) {
+      state.selectedAgentId = agent.getAttribute("data-agent-id");
+      renderActiveTab(false);
+      return;
+    }
+
+    const approve = e.target.closest("[data-approve-task]");
+    if (approve) {
+      await handleApproval(approve.getAttribute("data-approve-task"), true);
+      return;
+    }
+    const reject = e.target.closest("[data-reject-task]");
+    if (reject) {
+      await handleApproval(reject.getAttribute("data-reject-task"), false);
+      return;
+    }
+
+    const retry = e.target.closest("[data-retry-task]");
+    if (retry) {
+      try {
+        await fetchJson(`/api/tasks/${retry.getAttribute("data-retry-task")}/retry`, { method: "POST", body: {} });
+        await loadAll();
+        renderActiveTab(false);
+        notify("Task returned to the queue", "success");
+      } catch (err) {
+        notify("Could not retry task: " + err.message, "error");
+      }
+      return;
+    }
+
+    const suggestionTask = e.target.closest("[data-suggestion-task]");
+    if (suggestionTask) {
+      try {
+        await fetchJson(`/api/suggestions/${suggestionTask.getAttribute("data-suggestion-task")}/create-task`, {
+          method: "POST",
+          body: {},
+        });
+        await loadAll();
+        renderActiveTab(false);
+        notify("Suggestion added to the task board", "success");
+      } catch (err) {
+        notify("Could not create task: " + err.message, "error");
+      }
+      return;
+    }
+
+    const suggestionDismiss = e.target.closest("[data-suggestion-dismiss]");
+    if (suggestionDismiss) {
+      try {
+        await fetchJson(`/api/suggestions/${suggestionDismiss.getAttribute("data-suggestion-dismiss")}/dismiss`, {
+          method: "POST",
+          body: {},
+        });
+        await loadAll();
+        renderActiveTab(false);
+      } catch (err) {
+        notify("Could not dismiss suggestion: " + err.message, "error");
+      }
+      return;
+    }
+
+    const exportTask = e.target.closest("[data-export-task]");
+    if (exportTask) {
+      triggerDownload(`/api/tasks/${exportTask.getAttribute("data-export-task")}/export`);
+      return;
+    }
+
+    const testBtn = e.target.closest("[data-test-provider]");
+    if (testBtn) {
+      await testProvider(testBtn.getAttribute("data-test-provider"));
+      return;
+    }
+    if (e.target.closest("[data-test-web-search]")) {
+      await testWebSearch();
+      return;
+    }
+    const saveBtn = e.target.closest("[data-save-provider]");
+    if (saveBtn) {
+      await saveProviderKey(saveBtn.getAttribute("data-save-provider"));
+      return;
+    }
+    const clearBtn = e.target.closest("[data-clear-key]");
+    if (clearBtn) {
+      await clearProviderKey(clearBtn.getAttribute("data-clear-key"));
+      return;
+    }
+    const modelBtn = e.target.closest("[data-use-model]");
+    if (modelBtn) {
+      await useModel(modelBtn.getAttribute("data-use-model"));
+      return;
+    }
+
+    const connect = e.target.closest("[data-connect]");
+    if (connect) {
+      await connectResource(connect.getAttribute("data-connect"));
+      return;
+    }
+    const disconnect = e.target.closest("[data-disconnect]");
+    if (disconnect) {
+      await disconnectResource(disconnect.getAttribute("data-disconnect"));
+      return;
+    }
+    const readGoogleSheet = e.target.closest("[data-read-google-sheet]");
+    if (readGoogleSheet) {
+      await readGoogleSheetSample(readGoogleSheet.getAttribute("data-read-google-sheet"));
+      return;
+    }
+    const readGoogleAnalytics = e.target.closest("[data-read-google-analytics]");
+    if (readGoogleAnalytics) {
+      await readGoogleAnalyticsReport(readGoogleAnalytics.getAttribute("data-read-google-analytics"));
+      return;
+    }
+    const disconnectGoogle = e.target.closest("[data-disconnect-google-oauth]");
+    if (disconnectGoogle) {
+      if (!confirm("Disconnect Google access for saved Sheets and Analytics resources? Their resource IDs will remain saved.")) return;
+      try {
+        await fetchJson("/api/resources/google-oauth", { method: "DELETE" });
+        state.googleSheetValues = {};
+        state.googleAnalyticsReports = {};
+        await loadAll();
+        renderActiveTab(false);
+        notify("Google OAuth disconnected; saved resources remain.", "info");
+      } catch (error) {
+        notify("Could not disconnect Google: " + error.message, "error");
+      }
+      return;
+    }
+    const approveContent = e.target.closest("[data-approve-content]");
+    if (approveContent) {
+      await approveContentPost(approveContent.getAttribute("data-approve-content"));
+      return;
+    }
+
+    const download = e.target.closest("[data-download-file]");
+    if (download) {
+      triggerDownload(`/api/files/${download.getAttribute("data-download-file")}/download`);
+      return;
+    }
+    const del = e.target.closest("[data-delete-file]");
+    if (del) {
+      if (!confirm(`Delete ${del.getAttribute("data-file-name")}?`)) return;
+      try {
+        await fetchJson(`/api/files/${del.getAttribute("data-delete-file")}`, { method: "DELETE" });
+        notify("File deleted", "info");
+        await loadAll();
+        renderActiveTab(false);
+      } catch (err) {
+        notify("Delete failed: " + err.message, "error");
+      }
+      return;
+    }
+
+    const report = e.target.closest("[data-download-report]");
+    if (report) {
+      triggerDownload(`/api/weekly-reports/${report.getAttribute("data-download-report")}/download`);
+      return;
+    }
+    const playReport = e.target.closest("[data-play-report]");
+    if (playReport) {
+      await playSavedReport(playReport.getAttribute("data-play-report"));
+      return;
+    }
+
+    const providerCard = e.target.closest("[data-provider]");
+    if (providerCard) {
+      if (e.target.closest("input, button, a")) return;
+      await switchProvider(providerCard.getAttribute("data-provider"));
+      return;
+    }
+  });
+}
+
+/* Start */
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}
