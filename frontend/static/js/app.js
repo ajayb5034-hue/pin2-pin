@@ -31,13 +31,186 @@ const PROVIDER_CONFIG = {
   xai: { label: "Grok (xAI)", site: "https://console.x.ai/", mark: "X" },
   codex: { label: "OpenAI Codex API", site: "https://platform.openai.com/api-keys", mark: "C" },
   groq: { label: "Groq", site: "https://console.groq.com/keys", mark: "G" },
-  gemini: { label: "Google Gemini", site: "https://aistudio.google.com/app/apikey", mark: "✦" },
+  gemini: { label: "Google Gemini", site: "https://aistudio.google.com/app/apikey", mark: "G" },
   mistral: { label: "Mistral AI", site: "https://console.mistral.ai/api-keys/", mark: "M" },
   huggingface: { label: "Hugging Face", site: "https://huggingface.co/settings/tokens", mark: "HF" },
   deepinfra: { label: "DeepInfra", site: "https://deepinfra.com/dash/api_keys", mark: "DI" },
   nvidia: { label: "NVIDIA NIM", site: "https://build.nvidia.com/", mark: "N" },
   together: { label: "Together AI", site: "https://api.together.xyz/settings/api-keys", mark: "T" },
 };
+
+/* ------------------------------------------------------------------ */
+/* Inline icon system                                                  */
+/* ------------------------------------------------------------------ */
+
+const ICONS = {
+  dashboard: "M3 13h8V3H3zM13 21h8v-8h-8zM13 3v6h8V3zM3 21h8v-4H3z",
+  team: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
+  tasks: "M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2zM9 12h6M9 16h4",
+  suggestions: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 16l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z",
+  project: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  chat: "M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-5.4A8 8 0 1 1 21 12z",
+  resources: "M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7",
+  files: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5",
+  reports: "M3 3v18h18M8 17v-6M13 17V7M18 17v-4",
+  models: "M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2M7 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zM9 9h6v6H9z",
+  config: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M14 4v4M8 10v4M16 16v4",
+  activity: "M3 12h4l3-8 4 16 3-8h4",
+  plus: "M12 5v14M5 12h14",
+  refresh: "M20 7v5h-5M4 17v-5h5M5.6 9a7 7 0 0 1 11.6-2L20 12M4 12l2.8 5a7 7 0 0 0 11.6-2",
+  pause: "M8 5v14M16 5v14",
+  play: "m8 5 12 7-12 7z",
+  search: "M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16zM21 21l-4.3-4.3",
+  download: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
+  trash: "M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5",
+  send: "m22 2-7 20-4-9-9-4zM22 2 11 13",
+  check: "m5 12 4 4L19 6",
+  x: "M18 6 6 18M6 6l12 12",
+  "chevron-left": "m15 18-6-6 6-6",
+  "chevron-right": "m9 18 6-6-6-6",
+  "chevron-down": "m6 9 6 6 6-6",
+  "arrow-up-right": "M7 17 17 7M7 7h10v10",
+  star: "m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z",
+  clock: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 6v6l4 2",
+  spark: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 16l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z",
+  link: "M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7",
+  mail: "M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zM22 7l-10 7L2 7",
+  key: "M21 2l-2 2M10.4 13.6a5.5 5.5 0 1 1-7.8-7.8 5.5 5.5 0 0 1 7.8 7.8zM15 9l-4.6 4.6M14 10l3 3M17 7l3 3",
+  lock: "M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4M12 15v2",
+  bot: "M12 8V4H8M5 12h14a2 2 0 0 1 2 2v5H3v-5a2 2 0 0 1 2-2zM8 16h.01M16 16h.01M7 21h10",
+  code: "m8 8-4 4 4 4M16 8l4 4-4 4M14 4l-4 16",
+  folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  document: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h6",
+  image: "M3 3h18v18H3zM3 16l5-5 4 4 3-3 6 6M15 8h.01",
+  video: "M3 5h13v14H3zM16 10l5-3v10l-5-3z",
+  bell: "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4",
+  filter: "M4 5h16M7 12h10M10 19h4",
+  upload: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12",
+  more: "M5 12h.01M12 12h.01M19 12h.01",
+  info: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 11v6M12 7h.01",
+  warning: "M10.3 4.3 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01",
+  flag: "M5 21V5M5 5c5-4 9 4 14 0v10c-5 4-9-4-14 0",
+  minus: "M5 12h14",
+};
+
+function icon(name, size = 20) {
+  const paths = ICONS[name] || ICONS.info;
+  const dimension = Math.max(12, Math.min(72, Number(size) || 20));
+  return `<svg class="icon-glyph" width="${dimension}" height="${dimension}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="${paths}"/></svg>`;
+}
+
+function ensureIconSprite() {
+  if (document.getElementById("iconMaskSprite")) return;
+  const ns = "http://www.w3.org/2000/svg";
+  const sprite = document.createElementNS(ns, "svg");
+  sprite.id = "iconMaskSprite";
+  sprite.setAttribute("width", "0");
+  sprite.setAttribute("height", "0");
+  sprite.setAttribute("aria-hidden", "true");
+  sprite.style.position = "absolute";
+  sprite.style.overflow = "hidden";
+  Object.entries(ICONS).forEach(([name, paths]) => {
+    const mask = document.createElementNS(ns, "mask");
+    mask.id = `cut-${name}`;
+    mask.setAttribute("maskUnits", "userSpaceOnUse");
+    mask.setAttribute("x", "0");
+    mask.setAttribute("y", "0");
+    mask.setAttribute("width", "24");
+    mask.setAttribute("height", "24");
+    const background = document.createElementNS(ns, "rect");
+    background.setAttribute("width", "24");
+    background.setAttribute("height", "24");
+    background.setAttribute("fill", "white");
+    const glyph = document.createElementNS(ns, "path");
+    glyph.setAttribute("d", paths);
+    glyph.setAttribute("fill", "none");
+    glyph.setAttribute("stroke", "black");
+    glyph.setAttribute("stroke-width", "1.75");
+    glyph.setAttribute("stroke-linecap", "round");
+    glyph.setAttribute("stroke-linejoin", "round");
+    mask.append(background, glyph);
+    sprite.appendChild(mask);
+  });
+  document.body.prepend(sprite);
+}
+
+function iconTile(name, size = 44, tone = "accent") {
+  const safeName = Object.prototype.hasOwnProperty.call(ICONS, name) ? name : "info";
+  const dimension = Math.max(24, Math.min(72, Number(size) || 44));
+  if (tone === "soft") {
+    return `<span class="icon-tile icon-tile-soft" style="--tile-size:${dimension}px" aria-hidden="true">${icon(safeName, Math.round(dimension * 0.52))}</span>`;
+  }
+  ensureIconSprite();
+  return `<span class="icon-tile icon-tile-${tone === "ink" ? "ink" : "accent"}" style="--tile-size:${dimension}px" aria-hidden="true"><svg width="${dimension}" height="${dimension}" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect width="24" height="24" rx="5.37" fill="currentColor" mask="url(#cut-${safeName})"/></svg></span>`;
+}
+
+function hydrateShellIcons(root = document) {
+  root.querySelectorAll("[data-icon]").forEach((element) => {
+    element.innerHTML = icon(element.dataset.icon, element.classList.contains("nav-icon") ? 20 : 18);
+  });
+}
+
+const UI_ICON_BY_CODEPOINT = {
+  0x2699: "config", 0x26a0: "warning", 0x26d4: "warning", 0x2705: "check",
+  0x2709: "mail", 0x270d: "document", 0x2713: "check", 0x2726: "spark",
+  0x2728: "spark", 0x2733: "spark", 0x274c: "x", 0x2795: "plus",
+  0x2b07: "download", 0x2b50: "star", 0x1f310: "resources", 0x1f3ac: "video",
+  0x1f3af: "team", 0x1f440: "activity", 0x1f464: "team", 0x1f465: "team",
+  0x1f4a1: "suggestions", 0x1f4ac: "chat", 0x1f4bc: "team", 0x1f4be: "files",
+  0x1f4c1: "files", 0x1f4c4: "document", 0x1f4ca: "reports", 0x1f4cb: "tasks",
+  0x1f4e5: "files", 0x1f4c8: "reports", 0x1f4f7: "image", 0x1f504: "refresh", 0x1f50d: "search", 0x1f50e: "search",
+  0x1f511: "key", 0x1f553: "clock", 0x1f5d1: "trash", 0x1f6e0: "code",
+  0x1f916: "bot", 0x1f9e0: "models", 0x2708: "send",
+};
+
+function replaceUiEmoji(root) {
+  if (!root || !document.createTreeWalker) return;
+  const pattern = /[\u{1F300}-\u{1FAFF}\u2600-\u27BF\u2B00-\u2BFF]/gu;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  const preservedContent = ".task-out, .task-details-description, .task-details-result, .msg, .task-title, .agent-name, .agent-role, .feed-item .detail, .project-memory, .project-log-lines, .content-post-card p, .suggestion-card > p, .agent-job-profile p, .email-inbox-card p, .email-draft-card details p, [data-user-content]";
+  while (walker.nextNode()) {
+    if (!walker.currentNode.parentElement.closest(preservedContent) && pattern.test(walker.currentNode.nodeValue)) {
+      nodes.push(walker.currentNode);
+    }
+    pattern.lastIndex = 0;
+  }
+  nodes.forEach((node) => {
+    const text = node.nodeValue;
+    const fragment = document.createDocumentFragment();
+    let offset = 0;
+    for (const match of text.matchAll(pattern)) {
+      if (match.index > offset) fragment.appendChild(document.createTextNode(text.slice(offset, match.index)));
+      const codepoint = match[0].codePointAt(0);
+      const glyph = UI_ICON_BY_CODEPOINT[codepoint];
+      if (glyph) {
+        const replacement = document.createElement("span");
+        replacement.className = "inline-emoji-icon";
+        replacement.setAttribute("aria-hidden", "true");
+        replacement.innerHTML = icon(glyph, 16);
+        fragment.appendChild(replacement);
+      } else {
+        fragment.appendChild(document.createTextNode(match[0]));
+      }
+      offset = match.index + match[0].length;
+    }
+    if (offset < text.length) fragment.appendChild(document.createTextNode(text.slice(offset)));
+    node.replaceWith(fragment);
+  });
+}
+
+function observeUiEmoji() {
+  replaceUiEmoji(document.body);
+  const observer = new MutationObserver((records) => {
+    records.forEach((record) => {
+      if (record.type === "characterData") replaceUiEmoji(record.target.parentNode);
+      record.addedNodes.forEach((node) => {
+        if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) replaceUiEmoji(node);
+      });
+    });
+  });
+  observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+}
 
 const state = {
   agents: [],
@@ -104,6 +277,7 @@ const state = {
   reportPlayerIndex: 0,
   reportPlayerData: null,
   reportNarrationEnabled: false,
+  modalReturnFocus: null,
 };
 
 const ROLE_COLOR = {
@@ -131,11 +305,29 @@ const TAB_TITLES = {
   activity: "Activity Feed",
 };
 
+const PAGE_HEADINGS = {
+  dashboard: { icon: "dashboard", eyebrow: "AGENT OPERATIONS", prefix: "Your team, ", highlight: "in motion.", subtitle: "Work is routed to specialists, changes are tracked, and you stay in control of every external action." },
+  team: { icon: "team", eyebrow: "THE CREW", prefix: "Meet your ", highlight: "team.", subtitle: "Specialists you can assign, schedule and chat with." },
+  tasks: { icon: "tasks", eyebrow: "EXECUTION CENTER", prefix: "Work, clearly ", highlight: "moving forward.", subtitle: "Create tasks, follow their progress and review what your team delivers." },
+  suggestions: { icon: "suggestions", eyebrow: "IDLE-TIME RESEARCH", prefix: "Good ideas, only when work is ", highlight: "clear.", subtitle: "Agents research new ideas once your queue is empty. Add the ones you like as tasks." },
+  project: { icon: "project", eyebrow: "PROJECT WORKSPACE", prefix: "Work directly in your ", highlight: "project.", subtitle: "Choose a project folder and follow Engineering's work and logs." },
+  chat: { icon: "chat", eyebrow: "TEAM CHAT", prefix: "Talk to your ", highlight: "team.", subtitle: "Ask for status, assign work or get a second opinion from any agent." },
+  resources: { icon: "resources", eyebrow: "CONNECTED WORKSPACE", prefix: "Resources, with honest ", highlight: "status.", subtitle: "Connect only what you plan to use. A saved link does not mean an account is connected." },
+  files: { icon: "files", eyebrow: "WORKSPACE FILES", prefix: "Everything your team ", highlight: "made.", subtitle: "Files you uploaded and files your agents created." },
+  reports: { icon: "reports", eyebrow: "TEAM BRIEFING", prefix: "Work, told by the ", highlight: "team.", subtitle: "Create a recap of what got done, then play it or download it as a PDF." },
+  models: { icon: "models", eyebrow: "AI MODELS", prefix: "Choose your ", highlight: "model.", subtitle: "Pick which model your agents use. Provider setup lives in Configuration." },
+  config: { icon: "config", eyebrow: "SETTINGS", prefix: "Set up your ", highlight: "workspace.", subtitle: "Add your company details and connect an AI provider." },
+  activity: { icon: "activity", eyebrow: "ACTIVITY", prefix: "Everything your team ", highlight: "did.", subtitle: "A running log of tasks, approvals, messages and system events." },
+};
+
 /* ------------------------------------------------------------------ */
 /* Boot                                                                */
 /* ------------------------------------------------------------------ */
 
 async function init() {
+  ensureIconSprite();
+  hydrateShellIcons();
+  observeUiEmoji();
   const savedView = readLastView();
   if (savedView && TAB_CONTENT[savedView.tab]) state.activeTab = savedView.tab;
   await loadAll();
@@ -179,7 +371,7 @@ function updateLocalClock() {
 function renderOperationsPauseControl() {
   const button = document.getElementById("btnPauseWork");
   if (!button) return;
-  button.textContent = state.operations.paused ? "▶ Resume work" : "⏸ Pause work";
+  button.innerHTML = `${icon(state.operations.paused ? "play" : "pause", 18)}<span class="button-label">${state.operations.paused ? "Resume work" : "Pause work"}</span>`;
   button.setAttribute("aria-pressed", String(Boolean(state.operations.paused)));
   button.classList.toggle("btn-warning", Boolean(state.operations.paused));
   button.title = state.operations.paused
@@ -311,6 +503,76 @@ function formatBytes(n) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function chartPoints(values, width = 112, height = 36) {
+  const numbers = values.map((value) => Number(value) || 0);
+  const max = Math.max(1, ...numbers);
+  const step = numbers.length > 1 ? width / (numbers.length - 1) : width;
+  return numbers.map((value, index) => ({
+    x: index * step,
+    y: height - 3 - (value / max) * (height - 8),
+  }));
+}
+
+function sparkline(values, label = "Recent task activity") {
+  if (!Array.isArray(values) || !values.length || values.every((value) => !Number(value))) {
+    return `<svg class="chart-sparkline chart-empty" viewBox="0 0 112 36" role="img" aria-label="${esc(label)}: no data yet"><path d="M2 28H110" /></svg>`;
+  }
+  const points = chartPoints(values);
+  const path = points.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
+  const latest = points[points.length - 1];
+  return `<svg class="chart-sparkline" viewBox="0 0 112 36" role="img" aria-label="${esc(label)}: ${Number(values[values.length - 1]) || 0} most recent"><path class="chart-line" d="${path}" /><circle cx="${latest.x}" cy="${latest.y}" r="3" /></svg>`;
+}
+
+function areaChart(points, labels = []) {
+  const values = (Array.isArray(points) ? points : []).map((point) => Number(point) || 0);
+  if (!values.length || values.every((value) => !value)) {
+    return `<svg class="chart-area chart-empty" viewBox="0 0 320 120" role="img" aria-label="Task activity: no data yet"><path d="M8 92H312" /><text x="160" y="68" text-anchor="middle">No data yet</text></svg>`;
+  }
+  const coords = chartPoints(values, 304, 82).map((point) => ({ x: point.x + 8, y: point.y + 8 }));
+  const line = coords.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" ");
+  const fill = `${line} L312 100 L8 100 Z`;
+  const latest = coords[coords.length - 1];
+  const label = labels.length ? labels[labels.length - 1] : "Latest day";
+  return `<svg class="chart-area" viewBox="0 0 320 120" role="img" aria-label="${esc(label)}: ${values[values.length - 1]} tasks"><defs><linearGradient id="chartAreaFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".24"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs><path class="chart-area-fill" d="${fill}"/><path class="chart-line" d="${line}"/><circle cx="${latest.x}" cy="${latest.y}" r="4"/><text x="8" y="115">${esc(labels[0] || "")}</text><text x="312" y="115" text-anchor="end">${esc(label)}</text></svg>`;
+}
+
+function ringProgress(done, total) {
+  const complete = Math.max(0, Number(done) || 0);
+  const count = Math.max(0, Number(total) || 0);
+  const percent = count ? Math.min(100, complete / count * 100) : 0;
+  const circumference = 2 * Math.PI * 52;
+  const offset = circumference * (1 - percent / 100);
+  return `<div class="progress-ring" role="img" aria-label="${complete} of ${count} tasks done today" style="--ring-offset:${offset.toFixed(1)}px"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="ring-track" cx="60" cy="60" r="52"/><circle class="ring-value" cx="60" cy="60" r="52"/></svg><span><b>${complete}/${count}</b><small>${count ? "done today" : "no tasks today"}</small></span></div>`;
+}
+
+function hbarList(rows) {
+  const items = (Array.isArray(rows) ? rows : []).filter((row) => Number(row.value) > 0);
+  if (!items.length) return `<svg class="chart-bars chart-empty" viewBox="0 0 320 54" role="img" aria-label="Task statuses: no data yet"><path d="M8 38H312" /><text x="160" y="28" text-anchor="middle">No data yet</text></svg>`;
+  const max = Math.max(1, ...items.map((row) => Number(row.value)));
+  const height = Math.max(42, items.length * 26);
+  return `<svg class="chart-bars" viewBox="0 0 320 ${height}" role="img" aria-label="${esc(items.map((row) => `${row.label} ${row.value}`).join(", "))}"><g>${items.map((row, index) => {
+    const y = index * 26 + 2;
+    const width = Math.max(2, 220 * Number(row.value) / max);
+    return `<text x="0" y="${y + 13}">${esc(row.label)}</text><rect x="110" y="${y}" width="220" height="14" rx="7"/><rect class="bar-value" x="110" y="${y}" width="${width}" height="14" rx="7"/><text class="bar-count" x="300" y="${y + 13}" text-anchor="end">${Number(row.value)}</text>`;
+  }).join("")}</g></svg>`;
+}
+
+function stackedBar(segments) {
+  const rows = (Array.isArray(segments) ? segments : []).filter((segment) => Number(segment.value) >= 0);
+  const total = rows.reduce((sum, segment) => sum + Number(segment.value || 0), 0);
+  if (!rows.length || !total) {
+    return `<svg class="chart-stack chart-empty" viewBox="0 0 320 52" role="img" aria-label="Task pipeline: no data yet"><rect x="4" y="8" width="312" height="12" rx="6"/><text x="160" y="45" text-anchor="middle">No data yet</text></svg>`;
+  }
+  let x = 4;
+  const bars = rows.map((segment) => {
+    const width = 312 * Number(segment.value) / total;
+    const shape = `<rect x="${x.toFixed(2)}" y="8" width="${Math.max(width, 0).toFixed(2)}" height="16" fill="var(--${segment.token})"/>`;
+    x += width;
+    return shape;
+  }).join("");
+  return `<div class="chart-stack-wrap"><svg class="chart-stack" viewBox="0 0 320 32" role="img" aria-label="${esc(rows.map((segment) => `${segment.label}: ${segment.value}`).join(", "))}"><rect x="4" y="8" width="312" height="16" rx="8" fill="var(--track)"/><clipPath id="pipelineClip"><rect x="4" y="8" width="312" height="16" rx="8"/></clipPath><g clip-path="url(#pipelineClip)">${bars}</g></svg><div class="chart-legend">${rows.map((segment) => `<span><i class="legend-${esc(segment.token)}"></i>${esc(segment.label)} <b>${Number(segment.value)}</b></span>`).join("")}</div></div>`;
+}
+
 function cfgRow(key) {
   return (state.config || []).find((c) => c.key === key) || null;
 }
@@ -353,20 +615,20 @@ function agentShortName(role) {
   }[role] || role;
 }
 
-function agentIcon(role) {
+function agentIcon(role, size = 32) {
   const agent = typeof role === "object" && role ? role : null;
   const roleName = agent ? agent.role : role;
-  if (agent?.display_icon) return esc(agent.display_icon);
-  return {
-    "Chief Executive Officer": "🧠",
-    "Lead Generation": "🎯",
-    "Search Engine Optimization": "🔍",
-    "Data Scraping": "📥",
-    "LinkedIn Data Scraping": "💼",
-    "Email Sender & Receiver": "✉️",
-    "Software Engineering": "🛠️",
-    "Content Creation": "✍️",
-  }[roleName] || "🤖";
+  const glyph = {
+    "Chief Executive Officer": "spark",
+    "Lead Generation": "team",
+    "Search Engine Optimization": "search",
+    "Data Scraping": "files",
+    "LinkedIn Data Scraping": "team",
+    "Email Sender & Receiver": "mail",
+    "Software Engineering": "code",
+    "Content Creation": "document",
+  }[roleName] || "bot";
+  return iconTile(glyph, size, "ink");
 }
 
 function providerLabel(key) {
@@ -396,9 +658,12 @@ function notify(message, type = "info") {
     box = document.createElement("div");
     box.id = "appToast";
     box.className = "app-toast";
+    box.setAttribute("role", "status");
+    box.setAttribute("aria-live", "polite");
     document.body.appendChild(box);
   }
-  box.textContent = message;
+  const toastIcon = { success: "check", warning: "warning", error: "x", info: "info" }[type] || "info";
+  box.innerHTML = `${icon(toastIcon, 18)}<span>${esc(message)}</span>`;
   box.className = `app-toast show toast-${type}`;
   clearTimeout(box._hideTimer);
   box._hideTimer = setTimeout(() => {
@@ -610,12 +875,16 @@ function renderActiveTab(preserve = false) {
     const tab = state.activeTab || "dashboard";
     const titleEl = document.getElementById("pageTitle");
     if (titleEl) titleEl.textContent = TAB_TITLES[tab] || tab;
+    const breadcrumb = document.querySelector(".breadcrumbs .bc-current");
+    if (breadcrumb) breadcrumb.textContent = selectedPageLabel(tab);
 
     content.innerHTML = "";
     const fn = TAB_CONTENT[tab];
     if (fn) fn();
     else content.innerHTML = `<div class="empty">Tab "${esc(tab)}" not implemented.</div>`;
 
+    mountPageHeading(tab);
+    highlightSectionHeadings(content);
     highlightNav(tab);
     if (preserve) restoreUI(snap);
   } catch (e) {
@@ -627,6 +896,80 @@ function renderActiveTab(preserve = false) {
   }
 }
 
+function mountPageHeading(tab) {
+  const content = document.getElementById("content");
+  if (!content) return;
+  const selectedAgent = tab === "team" && state.selectedAgentId
+    ? state.agents.find((agent) => agent.id === state.selectedAgentId)
+    : null;
+  const heading = selectedAgent
+    ? { icon: "bot", eyebrow: "TEAM MEMBER", prefix: "", highlight: selectedAgent.name, subtitle: selectedAgent.role }
+    : PAGE_HEADINGS[tab];
+  if (!heading) return;
+
+  const heroSelector = {
+    dashboard: ".dashboard-hero",
+    tasks: ".board-intro",
+    suggestions: ".suggestions-hero",
+    resources: ".resource-hero",
+    reports: ".reports-hero",
+  }[tab];
+  const hero = heroSelector ? content.querySelector(heroSelector) : null;
+  const existing = hero
+    ? {
+      eyebrow: hero.querySelector(".eyebrow"),
+      title: hero.querySelector("h2"),
+      subtitle: hero.querySelector("p"),
+    }
+    : null;
+
+  const lockup = document.createElement("div");
+  lockup.className = "page-heading-lockup";
+  const tile = document.createElement("span");
+  tile.innerHTML = iconTile(heading.icon, 44, "accent");
+  lockup.appendChild(tile.firstElementChild);
+  const copy = document.createElement("div");
+  copy.className = "page-heading-copy";
+  const eyebrow = existing && existing.eyebrow ? existing.eyebrow : document.createElement("div");
+  eyebrow.classList.add("eyebrow");
+  eyebrow.textContent = heading.eyebrow;
+  const title = existing && existing.title ? existing.title : document.createElement("h1");
+  title.innerHTML = `${esc(heading.prefix)}<span class="hl-text">${esc(heading.highlight)}</span>`;
+  const subtitle = existing && existing.subtitle ? existing.subtitle : document.createElement("p");
+  subtitle.textContent = heading.subtitle;
+  copy.append(eyebrow, title, subtitle);
+  lockup.appendChild(copy);
+
+  if (hero) {
+    const isDashboardHero = hero.matches(".dashboard-hero");
+    const source = isDashboardHero ? hero.firstElementChild : hero;
+    const actions = source && source.querySelector(".hero-actions");
+    if (actions) copy.appendChild(actions);
+    if (source && source !== hero && !source.textContent.trim() && !source.children.length) source.remove();
+    hero.insertBefore(lockup, hero.firstChild);
+  } else {
+    content.insertBefore(lockup, content.firstChild);
+  }
+}
+
+function selectedPageLabel(tab) {
+  if (tab === "team" && state.selectedAgentId) {
+    const agent = state.agents.find((item) => item.id === state.selectedAgentId);
+    if (agent) return `${TAB_TITLES.team}  ›  ${agent.name}`;
+  }
+  return TAB_TITLES[tab] || tab;
+}
+
+function highlightSectionHeadings(root) {
+  root.querySelectorAll(".section-title, .panel-heading h3, .agent-schedule-section h3").forEach((heading) => {
+    if (heading.querySelector(".hl") || heading.querySelector("span")) return;
+    const text = heading.textContent.trim();
+    const words = text.split(/\s+/);
+    if (words.length < 2) return;
+    heading.innerHTML = `${esc(words.slice(0, -1).join(" "))} <span class="hl">${esc(words[words.length - 1])}</span>`;
+  });
+}
+
 function renderOnboarding() {
   const titleEl = document.getElementById("pageTitle");
   if (titleEl) titleEl.textContent = "Welcome to Pin2Pin";
@@ -634,22 +977,24 @@ function renderOnboarding() {
   if (!content) return;
   content.innerHTML = `
     <section class="onboarding-shell">
-      <div class="onboarding-card">
+      <div class="onboarding-card" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle" tabindex="-1">
+        ${iconTile("spark", 56, "accent")}
         <div class="eyebrow">YOUR LOCAL WORKSPACE</div>
-        <h2>Set up your company</h2>
-        <p>Pin2Pin runs locally on this computer. Your profile, tasks, files, and credentials stay in this installation.</p>
+        <h2 id="onboardingTitle">Welcome to <span class="hl">Pin2Pin.</span></h2>
+        <p>Set up your local workspace in a few seconds.</p>
         <form id="onboardingForm">
           <label>Your name<input name="owner_name" maxlength="100" required autocomplete="name" value="${esc(state.profile.owner_name || "")}"></label>
           <label>Company name<input name="company_name" maxlength="100" required value="${esc(state.profile.company_name || "")}"></label>
           <label>What does your company do?<textarea name="company_description" maxlength="1200" rows="4" placeholder="Optional, but it helps agents give relevant answers. Avoid confidential details.">${esc(state.profile.company_description || "")}</textarea></label>
           <label>Company website<input name="company_website" type="url" maxlength="500" placeholder="https://example.com" value="${esc(state.profile.company_website || "")}"></label>
-          <button class="btn btn-primary" type="submit">Save profile and continue</button>
+          <button class="btn btn-accent" type="submit">Get started</button>
           <div class="onboarding-error" id="onboardingError" role="alert"></div>
         </form>
       </div>
     </section>
   `;
   const form = document.getElementById("onboardingForm");
+  form.querySelector('input[name="owner_name"]')?.focus({ preventScroll: true });
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const data = new FormData(form);
@@ -671,7 +1016,11 @@ function renderOnboarding() {
 
 function highlightNav(tab) {
   document.querySelectorAll(".nav-item").forEach((el) => {
-    el.classList.toggle("active", el.dataset.tab === tab);
+    const active = el.dataset.tab === tab;
+    el.classList.toggle("active", active);
+    el.setAttribute("aria-label", el.querySelector(".nav-label")?.textContent.trim() || TAB_TITLES[el.dataset.tab] || el.dataset.tab);
+    if (active) el.setAttribute("aria-current", "page");
+    else el.removeAttribute("aria-current");
   });
 }
 
@@ -706,7 +1055,7 @@ function renderBottomPanel() {
     if (cur) taskTxt = cur.title;
     return `
       <div class="agent-status-item ${cls}">
-        <div class="item-name">${esc(agentShortName(a.role))} <span class="item-dot ${dot}"></span></div>
+        <div class="item-name">${agentIcon(a)}<span>${esc(agentShortName(a.role))}</span> <span class="item-dot ${dot}"></span></div>
         <div class="item-role">${esc(a.role)}</div>
         <div class="item-task">${esc(taskTxt)}</div>
       </div>`;
@@ -727,7 +1076,10 @@ function renderBottomPanel() {
       const container = document.getElementById("bottomPanelContainer");
       if (!container) return;
       container.classList.toggle("collapsed");
-      btn.textContent = container.classList.contains("collapsed") ? "▼" : "▲";
+      const collapsed = container.classList.contains("collapsed");
+      btn.innerHTML = icon("chevron-down", 18);
+      btn.setAttribute("aria-expanded", String(!collapsed));
+      btn.title = collapsed ? "Expand live team status" : "Collapse live team status";
     });
   }
 }
@@ -749,6 +1101,39 @@ function renderDashboard() {
   const completion = state.tasks.length ? Math.round((done / state.tasks.length) * 100) : 0;
   const connectedResources = state.accounts.filter((a) => a.status === "connected").length;
   const suggestions = (state.suggestions || []).filter((item) => item.status === "open");
+  const todayKey = new Date().toDateString();
+  const todayTasks = state.tasks.filter((task) => {
+    const createdToday = task.created_at && new Date(task.created_at).toDateString() === todayKey;
+    const activeToday = ["backlog", "assigned", "in_progress", "waiting_engineering", "review"].includes(task.status)
+      && task.updated_at && new Date(task.updated_at).toDateString() === todayKey;
+    return createdToday || activeToday;
+  });
+  const doneToday = todayTasks.filter((task) => task.status === "done"
+    && task.updated_at && new Date(task.updated_at).toDateString() === todayKey).length;
+  const dailyTaskCounts = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - (6 - index));
+    const key = date.toDateString();
+    return state.tasks.filter((task) => {
+      const timestamp = task.created_at || task.updated_at;
+      return timestamp && new Date(timestamp).toDateString() === key;
+    }).length;
+  });
+  const dailyDoneCounts = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - (6 - index));
+    const key = date.toDateString();
+    return state.tasks.filter((task) => task.status === "done"
+      && task.updated_at && new Date(task.updated_at).toDateString() === key).length;
+  });
+  const dayLabels = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - (6 - index));
+    return date.toLocaleDateString(undefined, { weekday: "short" });
+  });
   const recentActiveTasks = state.tasks
     .filter((task) => ["assigned", "in_progress", "waiting_engineering", "review", "blocked"].includes(task.status))
     .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
@@ -768,11 +1153,11 @@ function renderDashboard() {
         <h2>Your team, in motion.</h2>
         <p>Work is routed to specialists, changes are tracked, and you stay in control of every external action.</p>
         <div class="hero-actions">
-          <button class="btn btn-primary" data-goto="tasks">＋ Create a task</button>
+        <button class="btn btn-accent" data-goto="tasks">${icon("plus", 18)} Create a task</button>
           <button class="btn btn-ghost" data-goto="team">Meet your team</button>
         </div>
       </div>
-      <div class="hero-orbit" aria-hidden="true"><div class="orbit-ring"></div><div class="orbit-core">✳</div><span class="orbit-node node-one">AI</span><span class="orbit-node node-two">↗</span><span class="orbit-node node-three">✓</span></div>
+      <div class="hero-orbit">${ringProgress(doneToday, todayTasks.length)}</div>
       <div class="hero-status"><span class="live-pulse"></span>${working ? `${working} agent${working === 1 ? "" : "s"} working` : active ? `${active} task${active === 1 ? "" : "s"} in motion` : "Ready for the next task"}</div>
     </section>
 
@@ -780,68 +1165,64 @@ function renderDashboard() {
     ${blocked ? `<div class="notice-card warning-notice"><div><b>${blocked} blocked task${blocked === 1 ? "" : "s"}</b><div class="config-hint">See each task for the blocker and retry once it is fixed.</div></div><button class="btn btn-outline" data-goto="tasks">Review tasks</button></div>` : ""}
 
     <div class="metric-grid">
-      <article class="metric-card"><div class="metric-top"><span>In motion</span><span class="metric-icon icon-violet">↗</span></div><strong>${active}</strong><div class="metric-foot"><span class="live-pulse"></span>${working} agents active</div></article>
-      <article class="metric-card"><div class="metric-top"><span>Completed</span><span class="metric-icon icon-green">✓</span></div><strong>${done}</strong><div class="metric-foot">${completion}% of all tasks</div><div class="mini-progress"><i style="width:${completion}%"></i></div></article>
-      <article class="metric-card"><div class="metric-top"><span>Needs your review</span><span class="metric-icon icon-amber">!</span></div><strong>${pending}</strong><div class="metric-foot">${pending ? "External actions stay gated" : "No approvals waiting"}</div></article>
-      <article class="metric-card"><div class="metric-top"><span>Connected resources</span><span class="metric-icon icon-blue">⌁</span></div><strong>${connectedResources}</strong><div class="metric-foot">${state.files.length} shared files</div></article>
+      <article class="metric-card"><div class="metric-top"><span>In motion</span>${iconTile("activity", 28, "soft")}</div><div class="metric-value-row"><strong>${active}</strong></div><div class="metric-foot">${working} agents active</div></article>
+      <article class="metric-card"><div class="metric-top"><span>Completed</span>${iconTile("check", 28, "soft")}</div><div class="metric-value-row"><strong>${done}</strong>${sparkline(dailyDoneCounts, "Tasks completed each day this week")}</div><div class="metric-foot">${completion}% of all tasks</div><div class="mini-progress"><i style="width:${completion}%"></i></div></article>
+      <article class="metric-card"><div class="metric-top"><span>Awaiting review</span>${iconTile("clock", 28, "soft")}</div><div class="metric-value-row"><strong>${pending}</strong></div><div class="metric-foot">${pending ? "External actions stay gated" : "No approvals waiting"}</div></article>
+      <article class="metric-card"><div class="metric-top"><span>Connected resources</span>${iconTile("link", 28, "soft")}</div><div class="metric-value-row"><strong>${connectedResources}</strong></div><div class="metric-foot">${state.files.length} shared files</div></article>
     </div>
 
     <section class="surface-panel dashboard-task-panel">
-      <div class="panel-heading"><div><div class="eyebrow">TASKS IN MOTION</div><h3>Open work</h3></div><button class="text-action" data-goto="tasks">All statuses →</button></div>
+      <div class="panel-heading"><div><div class="eyebrow">TASKS IN MOTION</div><h3>Open work</h3><p class="panel-subtitle">A live view of work already on the board.</p></div><button class="text-action" data-goto="tasks">All statuses ${icon("arrow-up-right", 14)}</button></div>
       <div class="dashboard-task-list">${recentActiveTasks.map((task) => {
         const owner = state.agents.find((agent) => agent.id === task.assigned_agent_id);
         return `<button class="dashboard-task-row" data-open-task="${esc(task.id)}">
           <span class="dashboard-task-status status-${esc(task.status)}">${esc(statusLabel(task.status))}</span>
           <span class="dashboard-task-title"><b>${esc(task.title)}</b><small>${esc(owner ? owner.name : "Unassigned")} · ${new Date(task.updated_at).toLocaleString()}</small>${task.progress_summary ? `<small class="dashboard-task-progress" data-task-progress-summary="${esc(task.id)}">${esc(task.progress_summary)}${task.status === "in_progress" && task.estimated_remaining_seconds != null ? ` · ~${esc(formatTaskDuration(task.estimated_remaining_seconds))} left` : ""}</small>` : ""}</span>
-          <span class="dashboard-task-chevron">↗</span>
+          <span class="dashboard-task-chevron">${icon("arrow-up-right", 16)}</span>
         </button>`;
-      }).join("") || `<div class="empty-state">No open tasks. New assignments will appear here.</div>`}</div>
+      }).join("") || `<div class="empty-state">Nothing in motion. Create a task to get your team started.</div>`}</div>
     </section>
 
     <section class="surface-panel dashboard-task-panel">
-      <div class="panel-heading"><div><div class="eyebrow">RECENT DELIVERIES</div><h3>Latest 5 completed tasks</h3></div><button class="text-action" data-goto="files">All team files →</button></div>
+      <div class="panel-heading"><div><div class="eyebrow">RECENT DELIVERIES</div><h3>Latest 5 completed tasks</h3><p class="panel-subtitle">Finished work with a saved result.</p></div><button class="text-action" data-goto="files">All team files ${icon("arrow-up-right", 14)}</button></div>
       <div class="dashboard-task-list">${recentDoneTasks.map((task) => {
         const owner = state.agents.find((agent) => agent.id === task.assigned_agent_id);
+        const resultPreview = String(task.output || "").replace(/\s+/g, " ").trim().slice(0, 180);
+        const resultLabel = resultPreview || ((task.media_files || []).length ? "Media deliverable saved." : "Task completed without a saved text preview.");
         return `<button class="dashboard-task-row" data-open-task="${esc(task.id)}">
           <span class="dashboard-task-status status-done">Done</span>
-          <span class="dashboard-task-title"><b>${esc(task.title)}</b><small>${esc(owner ? owner.name : "Team")} · ${new Date(task.updated_at).toLocaleString()}</small></span>
-          <span class="dashboard-task-chevron">↗</span>
+          <span class="dashboard-task-title"><b>${esc(task.title)}</b><small>${esc(owner ? owner.name : "Team")} · ${new Date(task.updated_at).toLocaleString()}</small><small class="delivery-preview">${esc(resultLabel)}</small></span>
+          <span class="dashboard-task-chevron">${icon("arrow-up-right", 16)}</span>
         </button>`;
       }).join("") || `<div class="empty-state">Completed task outputs will be listed here.</div>`}</div>
     </section>
 
     <div class="dashboard-grid">
       <section class="surface-panel workload-panel">
-        <div class="panel-heading"><div><div class="eyebrow">WORKLOAD</div><h3>Task pipeline</h3></div><button class="text-action" data-goto="tasks">View board →</button></div>
-        <div class="pipeline-chart" role="img" aria-label="Task status distribution">
-          ${[
-            ["Backlog", "backlog", "#a9b5cb"], ["To do", "assigned", "#8092ff"],
-            ["In progress", "in_progress", "#8d72f7"],
-            ["Waiting for Engineering", "waiting_engineering", "#3b82f6"],
-            ["Review", "review", "#f0ac51"],
-            ["Done", "done", "#45b993"], ["Rejected", "rejected", "#a9b5cb"],
-            ["Blocked", "blocked", "#e27668"],
-          ].map(([label, key, color]) => {
-            const count = byStatus[key] || 0;
-            const ratio = state.tasks.length ? Math.max(count ? 5 : 0, count / state.tasks.length * 100) : 0;
-            return `<div class="pipeline-row"><div class="pipeline-label"><span><i style="--bar:${color}"></i>${label}</span><b>${count}</b></div><div class="pipeline-track"><i style="--bar:${color};width:${ratio}%"></i></div></div>`;
-          }).join("")}
-        </div>
+        <div class="panel-heading"><div><div class="eyebrow">WORKLOAD</div><h3>Task pipeline</h3><p class="panel-subtitle">Current tasks by status.</p></div><button class="text-action" data-goto="tasks">View board ${icon("arrow-up-right", 14)}</button></div>
+        ${stackedBar([
+          { label: "Backlog", value: byStatus.backlog || 0, token: "chart-secondary" },
+          { label: "To do", value: byStatus.assigned || 0, token: "chart-accent" },
+          { label: "In progress", value: byStatus.in_progress || 0, token: "chart-warn" },
+          { label: "Waiting for Engineering", value: byStatus.waiting_engineering || 0, token: "chart-secondary" },
+          { label: "Review", value: byStatus.review || 0, token: "chart-warn" },
+          { label: "Done", value: byStatus.done || 0, token: "chart-ok" },
+          { label: "Rejected", value: byStatus.rejected || 0, token: "chart-muted" },
+          { label: "Blocked", value: byStatus.blocked || 0, token: "chart-danger" },
+        ])}
+        <div class="dashboard-weekly-chart"><div class="chart-caption">New tasks by day</div>${areaChart(dailyTaskCounts, dayLabels)}</div>
       </section>
       <section class="surface-panel team-panel">
-        <div class="panel-heading"><div><div class="eyebrow">THE CREW</div><h3>Agent status</h3></div><button class="text-action" data-goto="team">All agents →</button></div>
-        <div class="team-activity-list">${state.agents.map((a) => {
-          const current = a.current_task_id ? state.tasks.find((t) => t.id === a.current_task_id) : null;
-          return `<div class="team-activity-row"><span class="agent-mini-avatar">${agentIcon(a)}</span><div class="team-activity-copy"><b>${esc(a.name)}</b><span>${esc(current ? current.title : a.role)}</span></div><span class="status-pip status-${esc(a.status)}">${esc(a.status.replace("_", " "))}</span></div>`;
-        }).join("") || `<div class="empty-state">Your agent team will appear here.</div>`}</div>
+        <div class="panel-heading"><div><div class="eyebrow">THE CREW</div><h3>Agent status</h3></div><button class="text-action" data-goto="team">All agents ${icon("arrow-up-right", 14)}</button></div>
+        <div class="dashboard-agent-grid">${state.agents.map((agent) => agentCardHtml(agent, true)).join("") || `<div class="empty-state">Your agent team will appear here.</div>`}</div>
       </section>
       <section class="surface-panel activity-panel">
-        <div class="panel-heading"><div><div class="eyebrow">LIVE FEED</div><h3>Recent activity</h3></div><button class="text-action" data-goto="activity">Open feed →</button></div>
-        <div class="dashboard-feed">${state.activity.slice(0, 6).map(feedItemHtml).join("") || `<div class="empty-state">New work will show up here.</div>`}</div>
+        <div class="panel-heading"><div><div class="eyebrow">LIVE FEED</div><h3>Recent activity</h3><p class="panel-subtitle">The latest updates from your workspace.</p></div><button class="text-action" data-goto="activity">Open feed ${icon("arrow-up-right", 14)}</button></div>
+        <div class="dashboard-feed">${state.activity.slice(0, 8).map(feedItemHtml).join("") || `<div class="empty-state">New work will show up here.</div>`}</div>
       </section>
       <section class="surface-panel suggestions-panel">
-        <div class="panel-heading"><div><div class="eyebrow">TEAM THINKING</div><h3>Suggestions</h3></div><button class="text-action" data-goto="suggestions">Explore →</button></div>
-        ${suggestions.slice(0, 2).map((item) => `<article class="suggestion-preview"><span class="suggestion-agent">${agentIcon(state.agents.find((a) => a.id === item.agent_id)?.role || "")} ${esc(item.agent_name || "Team")}</span><b>${esc(item.title)}</b><p>${esc(item.summary)}</p></article>`).join("") || `<div class="empty-state">When the queue is clear, the team will research and share a one-time set of suggestions.</div>`}
+        <div class="panel-heading"><div><div class="eyebrow">TEAM THINKING</div><h3>Suggestions</h3><p class="panel-subtitle">Ideas shared after active work is clear.</p></div><button class="text-action" data-goto="suggestions">See all ${icon("arrow-up-right", 14)}</button></div>
+        ${suggestions.slice(0, 3).map((item) => `<article class="suggestion-preview"><span class="suggestion-agent">${agentIcon(state.agents.find((a) => a.id === item.agent_id)?.role || "")} ${esc(item.agent_name || "Team")}</span><b>${esc(item.title)}</b><p>${esc(item.summary)}</p></article>`).join("") || `<div class="empty-state">No suggestions yet. Agents research once all queued, active and review tasks have cleared.</div>`}
       </section>
     </div>
   `;
@@ -861,7 +1242,7 @@ function renderSuggestions() {
       <div class="suggestion-run-state">${running ? `<span class="live-pulse"></span>${running} specialist${running === 1 ? "" : "s"} researching` : ready.length ? `${ready.length} fresh suggestion${ready.length === 1 ? "" : "s"} to review` : status.can_run ? "Queue clear. Agents are ready to research once." : reasons[0] || "Research cycle complete."}</div>
       <div class="suggestion-availability">${Number(status.processed_agents || 0)} / ${Number(status.total_agents || 0)} agents attempted this cycle</div>
       ${reasons.length > 1 ? `<ul class="suggestion-blockers">${reasons.map((reason) => `<li>${esc(reason)}</li>`).join("")}</ul>` : ""}
-      <button class="btn btn-primary btn-sm" id="btnRunSuggestions" ${status.can_run ? "" : "disabled"}>Research now</button>
+      <button class="btn btn-accent btn-sm" id="btnRunSuggestions" ${status.can_run ? "" : "disabled"}>${icon("spark", 16)} Research now</button>
     </section>
     <div class="suggestion-grid">
       ${suggestions.map((item) => {
@@ -927,19 +1308,27 @@ function agentCardHtml(a, clickable = false) {
     caps = [];
   }
   const cur = a.current_task_id ? state.tasks.find((t) => t.id === a.current_task_id) : null;
+  const activeStatuses = ["backlog", "assigned", "in_progress", "waiting_engineering", "review"];
+  const openCount = state.tasks.filter((task) => task.assigned_agent_id === a.id && activeStatuses.includes(task.status)).length;
+  const stars = Math.max(0, Number(a.appreciation_stars || 0));
+  const starBadge = stars
+    ? `<span class="agent-appreciation-badge" aria-label="${stars} appreciation stars">${icon("star", 14)} ${stars}</span>`
+    : "";
   const dataId = clickable ? ` data-agent-id="${esc(a.id)}"` : "";
   return `
     <div class="agent-card ${cls}"${dataId} style="${clickable ? "cursor:pointer" : ""}">
       <div class="agent-head">
-        <div class="agent-avatar">${agentIcon(a)}</div>
+        <div class="agent-avatar">${agentIcon(a, 40)}</div>
         <div class="agent-info">
           <div class="agent-name">${esc(a.name)}</div>
           <div class="agent-role">${esc(a.role)}</div>
         </div>
-        ${statusBadge}
+        <span class="agent-card-badges">${statusBadge}${starBadge}</span>
       </div>
-      <div class="agent-caps">${caps.join(", ")}</div>
+      <div class="agent-card-stats">${openCount} tasks open · ${Number(a.completed_count || 0)} completed</div>
+      <div class="agent-caps">${caps.map((capability) => esc(capability)).join(", ")}</div>
       ${cur ? `<div class="agent-current">Now: ${esc(cur.title)}</div>` : ""}
+      ${clickable ? `<button class="btn btn-ghost btn-sm" data-chat-agent="${esc(a.name)}">${icon("chat", 16)} Chat</button>` : ""}
     </div>
   `;
 }
@@ -966,7 +1355,7 @@ function taskOutputHtml(t) {
         : `<img loading="lazy" src="${esc(source)}" alt="${esc(file.name)}">`;
       return `<figure>${preview}<figcaption><span>${esc(file.name)}</span><div class="task-media-actions">
         <button class="btn btn-outline btn-sm" data-preview-file="${esc(file.id)}" data-preview-name="${esc(file.name)}" data-preview-mime="${esc(file.mime_type)}">See ${mediaKind}</button>
-        <button class="btn btn-outline btn-sm" data-download-file="${esc(file.id)}">⬇ Download ${mediaKind}</button>
+        <button class="btn btn-outline btn-sm" data-download-file="${esc(file.id)}">${icon("download", 16)} Download ${mediaKind}</button>
       </div></figcaption></figure>`;
     }).join("")}</div>`
     : "";
@@ -995,7 +1384,7 @@ function taskOutputHtml(t) {
   const extension = esc(t.export_extension || "txt");
   const formatLabel = extension === "csv" ? "CSV" : extension.toUpperCase();
   return `${mediaHtml}<details class="task-output" data-output-task="${esc(t.id)}"><summary>View output</summary>${body}</details>
-       <button class="btn btn-outline btn-sm" data-export-task="${esc(t.id)}">⬇ Download ${formatLabel}</button>`;
+       <button class="btn btn-outline btn-sm" data-export-task="${esc(t.id)}">${icon("download", 16)} Download ${formatLabel}</button>`;
 }
 
 function openTaskMediaPreview(fileId, filename, mimeType) {
@@ -1007,10 +1396,11 @@ function openTaskMediaPreview(fileId, filename, mimeType) {
     ? `<video controls autoplay src="${esc(source)}"></video>`
     : `<img src="${esc(source)}" alt="${esc(filename)}">`;
   const overlay = document.createElement("div");
+  state.modalReturnFocus = document.activeElement;
   overlay.id = "taskMediaPreviewOverlay";
   overlay.className = "task-media-preview-overlay";
   overlay.innerHTML = `<section class="task-media-preview-dialog" role="dialog" aria-modal="true" aria-label="${esc(filename)}">
-    <header><span>${esc(filename)}</span><button class="icon-btn" data-close-media-preview aria-label="Close preview">×</button></header>
+    <header><span>${esc(filename)}</span>    <button class="icon-btn" data-close-media-preview aria-label="Close preview" title="Close preview">${icon("x", 18)}</button></header>
     ${preview}
   </section>`;
   content.appendChild(overlay);
@@ -1209,18 +1599,18 @@ function taskCardHtml(t, compact = false) {
   const isArchived = Boolean(t.archived_at);
   const actions = t.needs_approval
     ? `<div class="task-actions">
-         <button class="btn btn-success btn-sm" data-approve-task="${esc(t.id)}">✅ Approve</button>
-         <button class="btn btn-danger btn-sm" data-reject-task="${esc(t.id)}">❌ Reject</button>
+         <button class="btn btn-success btn-sm" data-approve-task="${esc(t.id)}">${icon("check", 16)} Approve</button>
+         <button class="btn btn-danger btn-sm" data-reject-task="${esc(t.id)}">${icon("x", 16)} Reject</button>
        </div>`
     : ["done", "rejected", "blocked"].includes(t.status)
       ? `<div class="task-actions">
-           ${t.status === "blocked" ? `<button class="btn btn-outline btn-sm" data-retry-task="${esc(t.id)}">↻ Retry task</button>` : ""}
-           <button class="btn btn-primary btn-sm" data-task-chat="${esc(t.id)}">💬 Discuss / resume</button>
+           ${t.status === "blocked" ? `<button class="btn btn-outline btn-sm" data-retry-task="${esc(t.id)}">${icon("refresh", 16)} Retry task</button>` : ""}
+           <button class="btn btn-primary btn-sm" data-task-chat="${esc(t.id)}">${icon("chat", 16)} Discuss / resume</button>
          </div>`
       : "";
   const taskType = t.execution_mode === "project" ? '<span class="task-type">Project change</span>' : "";
   return `
-    <div class="task-card${needs}${prio}${isArchived ? " task-card-archived" : ""}" data-task-id="${esc(t.id)}" data-status="${esc(t.status)}">
+    <div class="task-card${needs}${prio}${isArchived ? " task-card-archived" : ""}" data-task-id="${esc(t.id)}" data-status="${esc(t.status)}" tabindex="0">
       <div class="task-agent">${agentName} <span class="tag tag-${esc(t.status)}">${esc(statusLabel(t.status))}</span>${isArchived ? `<span class="task-archived-label">Archived</span>` : ""}</div>
       <div class="task-title">${esc(t.title)}</div>
       ${taskType}
@@ -1231,7 +1621,7 @@ function taskCardHtml(t, compact = false) {
       ${actions}
       ${canArchive && !isArchived ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-archive-task="${esc(t.id)}">Hide from board</button></div>` : ""}
       ${isArchived ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-restore-task="${esc(t.id)}">Restore to board</button></div>` : ""}
-      <div class="task-meta"><span>Priority: ${esc(t.priority)}</span><span>${t.needs_approval ? "⚠️ Needs your approval" : (t.status === "done" ? "✅ Complete" : (t.execution_mode === "project" ? "🛠️ Changes applied in project" : "—"))}</span></div>
+      <div class="task-meta"><span>Priority: ${esc(t.priority)}</span><span>${t.needs_approval ? `${icon("warning", 14)} Needs your approval` : (t.status === "done" ? `${icon("check", 14)} Complete` : (t.execution_mode === "project" ? `${icon("code", 14)} Changes applied in project` : "—"))}</span></div>
     </div>`;
 }
 
@@ -1246,13 +1636,14 @@ function openTaskDetails(taskId) {
     if (existing) existing.remove();
     const agent = state.agents.find((item) => item.id === task.assigned_agent_id);
     const overlay = document.createElement("div");
+    state.modalReturnFocus = document.activeElement;
     overlay.id = "taskDetailsOverlay";
     overlay.className = "task-details-overlay";
     overlay.innerHTML = `
       <section class="task-details-dialog" role="dialog" aria-modal="true" aria-labelledby="taskDetailsTitle">
         <header class="task-details-header">
           <div><div class="eyebrow">TASK DETAILS</div><h2 id="taskDetailsTitle" data-task-id="${esc(task.id)}">${esc(task.title)}</h2></div>
-          <button class="icon-btn" data-close-task-details aria-label="Close task details">×</button>
+          <button class="icon-btn" data-close-task-details aria-label="Close task details" title="Close task details">${icon("x", 18)}</button>
         </header>
         <div class="task-details-meta">
           <span class="tag tag-${esc(task.status)}">${esc(statusLabel(task.status))}</span>
@@ -1267,7 +1658,7 @@ function openTaskDetails(taskId) {
         ${task.output || (task.media_files || []).length ? `<h3>Agent output</h3><div class="task-details-output">${taskOutputHtml(task)}</div>` : `<div class="task-details-empty">No output has been recorded yet.</div>`}
         ${task.needs_approval ? `<div class="task-actions"><button class="btn btn-success btn-sm" data-approve-task="${esc(task.id)}">Approve</button><button class="btn btn-danger btn-sm" data-reject-task="${esc(task.id)}">Reject</button></div>` : ""}
         ${task.status === "blocked" ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-retry-task="${esc(task.id)}">Retry task</button></div>` : ""}
-        ${["done", "rejected", "blocked"].includes(task.status) ? `<div class="task-actions"><button class="btn btn-primary btn-sm" data-task-chat="${esc(task.id)}">💬 Discuss / resume this task</button></div>` : ""}
+        ${["done", "rejected", "blocked"].includes(task.status) ? `<div class="task-actions"><button class="btn btn-primary btn-sm" data-task-chat="${esc(task.id)}">${icon("chat", 16)} Discuss / resume this task</button></div>` : ""}
         ${task.archived_at ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-restore-task="${esc(task.id)}">Restore to board</button></div>` : ""}
         ${["done", "rejected", "blocked"].includes(task.status) && !task.archived_at ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-archive-task="${esc(task.id)}">Hide from board (keep in memory)</button></div>` : ""}
       </section>
@@ -1303,13 +1694,14 @@ async function openTaskChat(taskId) {
     const existing = document.getElementById("taskChatOverlay");
     if (existing) existing.remove();
     const overlay = document.createElement("div");
+    state.modalReturnFocus = document.activeElement;
     overlay.id = "taskChatOverlay";
     overlay.className = "task-chat-overlay";
     overlay.innerHTML = `
       <section class="task-chat-dialog" role="dialog" aria-modal="true" aria-labelledby="taskChatTitle">
         <header class="task-details-header">
           <div><div class="eyebrow">TASK-ONLY CONVERSATION · ${esc(statusLabel(task.status).toUpperCase())}</div><h2 id="taskChatTitle">${esc(task.title)}</h2></div>
-          <button class="icon-btn" data-close-task-chat aria-label="Close task conversation">×</button>
+          <button class="icon-btn" data-close-task-chat aria-label="Close task conversation" title="Close task conversation">${icon("x", 18)}</button>
         </header>
         <p class="task-chat-hint">This chat is scoped to this task. Ask about the blocker or output, or say “resume from last” / “apply this change” to continue the same task.</p>
         <div class="task-chat-messages" id="taskChatMessages">${state.taskChatMessages.map(taskChatMessageHtml).join("") || `<div class="empty-state">No task discussion yet. Ask a question or describe what should change.</div>`}</div>
@@ -1391,7 +1783,7 @@ function renderTeam() {
 
   document.getElementById("content").innerHTML = `
     <div class="section">
-      <div class="section-title">Team Members</div>
+      <div class="section-title">Team members</div>
       <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Click any agent to see their tasks, outputs, messages and activity.</p>
       <div class="agent-grid">${state.agents.map((a) => agentCardHtml(a, true)).join("")}</div>
     </div>
@@ -1399,16 +1791,16 @@ function renderTeam() {
     <div class="section">
       <div class="section-title">Create a specialist agent</div>
       <form id="createAgentForm" class="card" style="max-width:620px;display:grid;gap:12px;">
-        <label>Agent name<input name="name" maxlength="60" required placeholder="e.g. Product Analyst"></label>
-        <label>Job title<input name="job_title" maxlength="60" required placeholder="e.g. Market Research Specialist"></label>
-        <label>Icon<input name="display_icon" maxlength="12" placeholder="Optional"></label>
-        <label>Job title and responsibilities<textarea name="job_profile" maxlength="3000" rows="4" required placeholder="Describe the agent's expertise, responsibilities, and how it should deliver work."></textarea></label>
-        <button class="btn btn-primary" type="submit">Create agent</button>
+        <label>Name<input name="name" maxlength="60" required placeholder="e.g. Product Analyst"></label>
+        <label>Role<input name="job_title" maxlength="60" required placeholder="e.g. Market Research Specialist"></label>
+        <label>Icon label<input name="display_icon" maxlength="12" placeholder="Optional short label"></label>
+        <label>Responsibilities<textarea name="job_profile" maxlength="3000" rows="4" required placeholder="Describe the agent's expertise, responsibilities, and how it should deliver work."></textarea></label>
+        <button class="btn btn-accent" type="submit">${icon("plus", 16)} Create agent</button>
       </form>
     </div>
 
     <div class="section" id="assignWorkSection">
-      <div class="section-title">✍️ Assign Work Personally</div>
+      <div class="section-title">Assign a task</div>
       <div class="card" style="max-width:620px;">
         <div class="input-wrap">
           <label>Task title</label>
@@ -1441,7 +1833,7 @@ function renderTeam() {
           </select>
           <div class="config-hint">Project changes run in the configured workspace with Codex's workspace-write sandbox. Review changes in your project after the task.</div>
         </div>
-        <button class="btn btn-primary" id="btnCreateTask">Create Task</button>
+        <button class="btn btn-accent" id="btnCreateTask">${icon("plus", 18)} Create task</button>
       </div>
     </div>
   `;
@@ -1459,7 +1851,7 @@ function renderAgentDetail(agent) {
   const schedules = state.agentSchedules.filter((schedule) => schedule.agent_id === agent.id);
   const stars = Math.max(0, Number(agent.appreciation_stars || 0));
   const starBadge = stars
-    ? `<div class="agent-appreciation-badge" aria-label="${stars} appreciation stars"><span>${"⭐".repeat(Math.min(3, stars))}</span>${stars > 3 ? `<b>+${stars - 3} more</b>` : ""}</div>`
+    ? `<div class="agent-appreciation-badge" aria-label="${stars} appreciation stars"><span>${Array.from({ length: Math.min(3, stars) }, () => icon("star", 14)).join("")}</span>${stars > 3 ? `<b>+${stars - 3} more</b>` : ""}</div>`
     : "";
   let caps = [];
   try {
@@ -1477,12 +1869,12 @@ function renderAgentDetail(agent) {
   document.getElementById("content").innerHTML = `
     <div class="section">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
-        <button class="btn btn-outline btn-sm" data-back-team="1">← Back to Team</button>
+        <button class="btn btn-outline btn-sm" data-back-team="1">${icon("chevron-left", 16)} Back to Team</button>
         <div style="font-size:13px;color:var(--muted);">Agent Detail</div>
       </div>
       <div class="card" style="max-width:760px;">
         <div class="agent-head">
-          <div class="agent-avatar agent-${ROLE_COLOR[agent.role] || ""}">${agentIcon(agent)}</div>
+          <div class="agent-avatar agent-detail-avatar">${agentIcon(agent, 72)}</div>
           <div class="agent-info">
             <div class="agent-name">${esc(agent.name)}</div>
             <div class="agent-role">${esc(agent.role)}</div>
@@ -1490,7 +1882,7 @@ function renderAgentDetail(agent) {
           ${statusBadge}
         </div>
         ${starBadge}
-        <div class="agent-caps" style="margin-top:10px;">Capabilities: ${caps.join(", ")}</div>
+        <div class="agent-caps" style="margin-top:10px;">Capabilities: ${caps.map((capability) => esc(capability)).join(", ")}</div>
         <div class="agent-profile-stats">
           <span><b>${Number(agent.task_count || 0)}</b> tasks</span>
           <span><b>${Number(agent.completed_count || 0)}</b> completed</span>
@@ -1504,7 +1896,7 @@ function renderAgentDetail(agent) {
           <form id="agentProfileForm" data-agent-profile="${esc(agent.id)}">
             <label>Display name<input name="name" maxlength="60" required value="${esc(agent.name)}"></label>
             ${agent.is_custom ? `<label>Job title<input name="job_title" maxlength="60" required value="${esc(agent.role)}"></label>` : ""}
-            <label>Icon / emoji<input name="display_icon" maxlength="12" value="${esc(agent.display_icon || "")}" placeholder="${esc(agentIcon(agent.role))}"></label>
+            <label>Icon label<input name="display_icon" maxlength="12" value="${esc(agent.display_icon || "")}" placeholder="Optional short label"></label>
             <label>Job profile<textarea name="job_profile" maxlength="3000" rows="4" required>${esc(agent.job_profile || agent.role)}</textarea></label>
             <label>Report voice profile<input name="voice_profile" maxlength="120" value="${esc(agent.voice_profile || "")}" placeholder="Optional browser voice name"></label>
             <small>Role identity stays fixed for task routing. Voice availability depends on voices installed in your browser/OS.</small>
@@ -1534,22 +1926,22 @@ function renderAgentDetail(agent) {
       </div>
 
       <div style="display:flex;gap:10px;margin:14px 0;">
-        <button class="btn btn-primary" data-chat-agent="${esc(agent.name)}">💬 Chat with ${esc(agent.name)}</button>
-        <button class="btn btn-outline" id="btnRefreshAgent">🔄 Refresh</button>
+        <button class="btn btn-primary" data-chat-agent="${esc(agent.name)}">${icon("chat", 18)} Chat with ${esc(agent.name)}</button>
+        <button class="btn btn-outline" id="btnRefreshAgent">${icon("refresh", 18)} Refresh</button>
         ${agent.role !== "Chief Executive Officer" ? `<button class="btn btn-outline btn-danger" data-delete-agent="${esc(agent.id)}">Delete agent</button>` : ""}
       </div>
 
-      <div class="section-title" style="margin-bottom:8px;">📋 Tasks (${agentTasks.length})</div>
+      <div class="section-title" style="margin-bottom:8px;">${icon("tasks", 16)} Tasks (${agentTasks.length})</div>
       <div style="max-width:760px;">
         ${agentTasks.map((t) => taskCardHtml(t)).join("") || "<div class='empty'>No tasks assigned yet.</div>"}
       </div>
 
-      <div class="section-title mt-8" style="margin-bottom:8px;">💬 Recent Messages</div>
+      <div class="section-title mt-8" style="margin-bottom:8px;">${icon("chat", 16)} Recent messages</div>
       <div class="msg-list" style="max-width:760px;">
         ${agentMessages.map((m) => messageHtml(m)).join("") || "<div class='empty'>No messages yet.</div>"}
       </div>
 
-      <div class="section-title mt-8" style="margin-bottom:8px;">🕓 Activity</div>
+      <div class="section-title mt-8" style="margin-bottom:8px;">${icon("activity", 16)} Recent activity</div>
       <div style="max-width:760px;">
         ${agentActivity.map((a) => feedItemHtml(a)).join("") || "<div class='empty'>No activity yet.</div>"}
       </div>
@@ -1561,6 +1953,8 @@ function renderAgentDetail(agent) {
     refresh.addEventListener("click", async () => {
       await loadAll();
       renderAgentDetail(agent);
+      mountPageHeading("team");
+      highlightSectionHeadings(document.getElementById("content"));
     });
   }
   const profileForm = document.getElementById("agentProfileForm");
@@ -1658,7 +2052,7 @@ function renderProject() {
   const ready = !!project.codex_available;
   document.getElementById("content").innerHTML = `
     <div class="section">
-      <div class="section-title">🛠️ Let the team work in your project</div>
+      <div class="section-title">${icon("code", 18)} Let the team work in your project</div>
       <p class="project-intro">Choose the project folder once. Project tasks are assigned to Engineering, which uses the installed Codex CLI to read, edit, and test files in that folder instead of returning suggestions only.</p>
       <div class="card project-setup-card">
         <div class="input-wrap">
@@ -1826,14 +2220,14 @@ async function saveProjectWorkspace(clear) {
 
 function renderTasksBoard() {
   const cols = [
-    { key: "backlog", title: "📥 Backlog" },
-    { key: "assigned", title: "⏳ To Do" },
-    { key: "in_progress", title: "🔄 In Progress" },
-    { key: "waiting_engineering", title: "🛠️ Waiting for Engineering" },
-    { key: "review", title: "👀 CEO Review" },
-    { key: "done", title: "✅ Done" },
-    { key: "rejected", title: "❌ Rejected" },
-    { key: "blocked", title: "⛔ Blocked" },
+    { key: "backlog", title: "Backlog" },
+    { key: "assigned", title: "To Do" },
+    { key: "in_progress", title: "In Progress" },
+    { key: "waiting_engineering", title: "Waiting for Engineering" },
+    { key: "review", title: "CEO Review" },
+    { key: "done", title: "Done" },
+    { key: "rejected", title: "Rejected" },
+    { key: "blocked", title: "Blocked" },
   ];
   const workerOptions = state.agents
     .filter((a) => a.role !== "Chief Executive Officer")
@@ -1844,16 +2238,16 @@ function renderTasksBoard() {
     <div class="section">
       <div class="board-intro">
         <div><div class="eyebrow">EXECUTION CENTER</div><h2>Work, clearly moving forward.</h2><p>Assign an outcome, see who owns it, and review the actual result.</p></div>
-        <button class="btn btn-primary" id="btnOpenBoardCreate">＋ New task</button>
+        <button class="btn btn-accent" id="btnOpenBoardCreate">${icon("plus", 18)} New task</button>
       </div>
       <div class="board-toolbar">
-        <label class="board-search"><span>⌕</span><input id="taskSearch" type="search" placeholder="Search tasks, owners, or results…" aria-label="Search tasks"></label>
-        <select id="taskStatusFilter" aria-label="Filter tasks by status"><option value="">All statuses</option>${cols.map((col) => `<option value="${col.key}">${col.title.replace(/^[^ ]+ /, "")}</option>`).join("")}</select>
+        <label class="board-search"><span>${icon("search", 18)}</span><input id="taskSearch" type="search" placeholder="Search tasks, owners, or results…" aria-label="Search tasks"></label>
+        <select id="taskStatusFilter" aria-label="Filter tasks by status"><option value="">All statuses</option>${cols.map((col) => `<option value="${col.key}">${col.title}</option>`).join("")}</select>
         <span class="board-task-total">${state.tasks.length} tasks</span>
         <button class="btn btn-outline btn-sm" id="toggleArchivedTasks">${state.showArchivedTasks ? "Hide archived" : "Show archived"}</button>
       </div>
       <details class="create-task-panel">
-        <summary>➕ Assign a new task</summary>
+        <summary>${icon("plus", 16)} Assign a new task</summary>
         <div class="card" style="max-width:640px;margin-top:10px;">
           <div class="input-wrap">
             <label>Task title</label>
@@ -1888,7 +2282,7 @@ function renderTasksBoard() {
             </select>
             <div class="config-hint">Project changes run inside your configured workspace. <a href="#" data-goto="project">Set up the workspace first.</a></div>
           </div>
-          <button class="btn btn-primary" id="btnBoardCreate">Create Task</button>
+          <button class="btn btn-accent" id="btnBoardCreate">${icon("plus", 16)} Create task</button>
         </div>
       </details>
       <div class="board">
@@ -2025,7 +2419,7 @@ function renderChatTab() {
     <div class="chat-panel">
       <div class="chat-panel-header">
         <div>
-          <div style="font-weight:700;">💬 Team Chat</div>
+          <div style="font-weight:700;">${icon("chat", 16)} Team chat</div>
           <label class="chat-recipient-label" for="chatReceiverLive">Conversation with</label>
         </div>
         <select id="chatReceiverLive" aria-label="Choose who to chat with">${buildReceiverOptions()}</select>
@@ -2073,7 +2467,7 @@ function buildReceiverOptions() {
     ? state.agents
     : [{ name: "CEO", role: "Chief Executive Officer" }];
   const opts = agents.map((a) => `<option value="${esc(a.name)}">${agentIcon(a.role)} ${esc(a.name)} — ${esc(a.role)}</option>`).join("");
-  return opts + `<option value="user">👤 You (personal note)</option>`;
+  return opts + `<option value="user">You (personal note)</option>`;
 }
 
 function messageHtml(m, conversation = state.messages) {
@@ -2156,7 +2550,7 @@ async function sendChat(source) {
       id: "err_" + Date.now(),
       sender: "system",
       receiver: "user",
-      content: "⚠️ " + e.message,
+      content: "\u{26A0} " + e.message,
       timestamp: new Date().toISOString(),
       read: 0,
     });
@@ -2356,7 +2750,7 @@ function renderResources() {
             <div class="resource-head"><div class="r-name">${platform.icon} ${esc(platform.label)}</div>
               <div class="r-badge ${activeConnection ? "badge-connected" : "badge-disconnected"}">${stateLabel}</div></div>
             <div class="resource-desc">${esc(platform.hint)}</div>
-            ${platform.setup ? `<details class="resource-guide"><summary>How to connect</summary><p>${esc(platform.setup)}</p><a href="${esc(platform.setupUrl)}" target="_blank" rel="noopener noreferrer">Official setup documentation ↗</a><small>${platform.key === "gmail" ? "Inbox checks use read-only IMAP; sending always waits for your explicit approval." : ["google_sheets", "google_analytics"].includes(platform.key) ? "OAuth credentials are stored locally; Google access is read-only." : "No active connector exists for this provider. Do not paste passwords, API keys, or OAuth secrets here."}</small></details>` : ""}
+            ${platform.setup ? `<details class="resource-guide"><summary>How to connect</summary><p>${esc(platform.setup)}</p><a href="${esc(platform.setupUrl)}" target="_blank" rel="noopener noreferrer">Official setup documentation ${icon("arrow-up-right", 13)}</a><small>${platform.key === "gmail" ? "Inbox checks use read-only IMAP; sending always waits for your explicit approval." : ["google_sheets", "google_analytics"].includes(platform.key) ? "OAuth credentials are stored locally; Google access is read-only." : "No active connector exists for this provider. Do not paste passwords, API keys, or OAuth secrets here."}</small></details>` : ""}
             ${accounts.map((account) => `
               <div class="resource-account-row"><span><b>${esc(account.username)}</b><small>${account.status === "connected" && account.verified
                 ? esc(account.notes || "Verified")
@@ -2699,13 +3093,13 @@ function renderFiles() {
         ${file.task_id ? `<div class="file-meta">Created ${new Date(file.created_at).toLocaleDateString()}</div>` : ""}
       </div>
       <div class="file-actions">
-        <button class="btn btn-outline btn-sm" data-download-file="${esc(file.id)}">⬇ Download</button>
-        <button class="btn btn-outline btn-sm" data-delete-file="${esc(file.id)}" data-file-name="${esc(file.original_name)}">🗑 Delete</button>
+        <button class="btn btn-outline btn-sm" data-download-file="${esc(file.id)}">${icon("download", 14)} Download</button>
+        <button class="btn btn-outline btn-sm" data-delete-file="${esc(file.id)}" data-file-name="${esc(file.original_name)}">${icon("trash", 14)} Delete</button>
       </div>
     </div>`;
   document.getElementById("content").innerHTML = `
     <div class="section">
-      <div class="section-title">📁 Shared files</div>
+      <div class="section-title">${icon("files", 18)} Shared files</div>
       <p class="files-intro">Agent deliverables are saved automatically using task, agent, status, and date in the filename. The dashboard shows only the latest five completed tasks.</p>
       <div class="file-upload-zone" id="fileDropZone">
         <div style="font-weight:700;margin-bottom:6px;">Upload a file (Excel, PPT, Word, PDF, image, video, text)</div>
@@ -2764,26 +3158,37 @@ async function uploadFiles(fileList) {
 /* ------------------------------------------------------------------ */
 
 function renderReports() {
+  const latest = state.weeklyReports[0];
+  const archivedReports = state.weeklyReports.slice(latest ? 1 : 0);
   document.getElementById("content").innerHTML = `
     <section class="reports-hero">
       <div><div class="eyebrow">TEAM BRIEFING</div><h2>Work, told by the team.</h2>
         <p>Play an interactive recap built from saved tasks and agent outputs, or download a visual PDF summary.</p></div>
-      <button class="btn btn-primary" id="btnGenReport">✦ Create a team recap</button>
+      <button class="btn btn-accent" id="btnGenReport">${icon("spark", 18)} Create a team recap</button>
     </section>
+    ${latest ? `<section class="report-feature surface-panel">
+      <div class="eyebrow">LATEST BRIEFING</div>
+      <h2>Team recap · ${esc(latest.week_start)} — ${esc(latest.week_end)}</h2>
+      <p class="panel-subtitle">Generated ${new Date(latest.generated_at).toLocaleString()}</p>
+      <div class="report-actions">
+        <button class="btn btn-primary" data-play-report="${esc(latest.id)}">${icon("play", 18)} Play recap</button>
+        <button class="btn btn-outline" data-download-report="${esc(latest.id)}">${icon("download", 18)} Download PDF</button>
+      </div>
+    </section>` : ""}
     <div class="report-list">
       <div class="panel-heading"><div><div class="eyebrow">ARCHIVE</div><h3>Past briefings</h3></div></div>
       <div class="report-grid">
-        ${state.weeklyReports.map((r) => `
+        ${archivedReports.map((r) => `
           <article class="report-card">
             <div class="report-info">
               <div class="report-title">Team recap · ${esc(r.week_start)} — ${esc(r.week_end)}</div>
               <div class="report-meta">Generated ${new Date(r.generated_at).toLocaleString()}</div>
             </div>
             <div class="report-actions">
-              <button class="btn btn-primary btn-sm" data-play-report="${esc(r.id)}">▶ Play recap</button>
-              <button class="btn btn-outline btn-sm" data-download-report="${esc(r.id)}">⬇ Download PDF</button>
+              <button class="btn btn-primary btn-sm" data-play-report="${esc(r.id)}">${icon("play", 16)} Play recap</button>
+              <button class="btn btn-outline btn-sm" data-download-report="${esc(r.id)}">${icon("download", 16)} Download PDF</button>
             </div>
-          </article>`).join("") || "<div class='empty-state'>No reports yet. Create a recap to see an agent-by-agent story grounded in saved work.</div>"}
+          </article>`).join("") || `<div class="empty-state">${latest ? "No past briefings yet." : "No reports yet. Create a recap to see an agent-by-agent story grounded in saved work."}</div>`}
       </div>
     </div>
   `;
@@ -2808,24 +3213,18 @@ async function generateReport() {
     notify("Team recap failed: " + e.message, "error");
     if (btn) {
       btn.disabled = false;
-      btn.textContent = "✦ Create a team recap";
+      btn.innerHTML = `${icon("spark", 18)} Create a team recap`;
     }
   }
 }
 
 function reportStatusChart(counts) {
   const entries = [
-    ["Done", "done", "#45b993"], ["To do", "assigned", "#8092ff"],
-    ["In progress", "in_progress", "#8d72f7"],
-    ["Waiting for Engineering", "waiting_engineering", "#3b82f6"],
-    ["Review", "review", "#f0ac51"], ["Backlog", "backlog", "#a9b5cb"],
-    ["Blocked", "blocked", "#e27668"],
+    ["Done", "done"], ["To do", "assigned"],
+    ["In progress", "in_progress"], ["Waiting for Engineering", "waiting_engineering"],
+    ["Review", "review"], ["Backlog", "backlog"], ["Blocked", "blocked"],
   ];
-  const max = Math.max(1, ...entries.map(([, key]) => Number(counts[key] || 0)));
-  return `<div class="recap-chart">${entries.map(([label, key, color]) => {
-    const count = Number(counts[key] || 0);
-    return `<div class="recap-chart-row"><span>${label}</span><div><i style="--bar:${color};--value:${Math.max(count ? 6 : 0, count / max * 100)}%"></i></div><b>${count}</b></div>`;
-  }).join("")}</div>`;
+  return hbarList(entries.map(([label, key]) => ({ label, value: Number(counts[key] || 0) })));
 }
 
 const REPORT_VOICE_PROFILES = {
@@ -3018,44 +3417,44 @@ function wrapVideoText(context, text, x, y, maxWidth, lineHeight, maxLines) {
 
 function drawReportVideoSlide(context, slide, index, total) {
   const gradient = context.createLinearGradient(0, 0, 1280, 720);
-  gradient.addColorStop(0, "#171d36");
-  gradient.addColorStop(1, "#353063");
+  gradient.addColorStop(0, "#F4EEE2");
+  gradient.addColorStop(1, "#FBF8F1");
   context.fillStyle = gradient;
   context.fillRect(0, 0, 1280, 720);
-  context.fillStyle = "#b9adff";
+  context.fillStyle = "#A8480F";
   context.font = "700 20px Segoe UI, sans-serif";
-  context.fillText("✦ PREEMPTION  /  TEAM RECAP", 78, 70);
-  context.fillStyle = "#aaa5ce";
+  context.fillText("PIN2PIN  /  TEAM RECAP", 78, 70);
+  context.fillStyle = "#6A6054";
   context.font = "600 17px Segoe UI, sans-serif";
   context.fillText(slide.kicker.toUpperCase().slice(0, 95), 80, 145);
-  context.fillStyle = "#ffffff";
+  context.fillStyle = "#1A1714";
   context.font = "700 54px Segoe UI, sans-serif";
   wrapVideoText(context, slide.title, 80, 230, 1100, 66, 2);
-  context.fillStyle = "#e3e1f3";
+  context.fillStyle = "#51483E";
   context.font = "400 27px Segoe UI, sans-serif";
   wrapVideoText(context, slide.body, 84, 350, 1080, 42, 7);
   if (slide.counts) {
     const metrics = [
-      ["Done", Number(slide.counts.done || 0), "#52d1a1"],
-      ["In progress", Number(slide.counts.in_progress || 0), "#a48aff"],
-      ["Review", Number(slide.counts.review || 0), "#f2bd66"],
-      ["Blocked", Number(slide.counts.blocked || 0), "#f17e79"],
+      ["Done", Number(slide.counts.done || 0), "#2F6F4A"],
+      ["In progress", Number(slide.counts.in_progress || 0), "#BF541A"],
+      ["Review", Number(slide.counts.review || 0), "#8A6200"],
+      ["Blocked", Number(slide.counts.blocked || 0), "#B42318"],
     ];
     const maximum = Math.max(1, ...metrics.map((metric) => metric[1]));
     metrics.forEach(([label, count, color], row) => {
       const y = 565 + row * 34;
-      context.fillStyle = "#d9d7e8";
+      context.fillStyle = "#51483E";
       context.font = "500 18px Segoe UI, sans-serif";
       context.fillText(label, 800, y);
-      context.fillStyle = "#545170";
+      context.fillStyle = "#EADFCB";
       context.fillRect(970, y - 17, 200, 15);
       context.fillStyle = color;
       context.fillRect(970, y - 17, 200 * count / maximum, 15);
-      context.fillStyle = "#ffffff";
+      context.fillStyle = "#1A1714";
       context.fillText(String(count), 1185, y);
     });
   }
-  context.fillStyle = "#aaa5ce";
+  context.fillStyle = "#6A6054";
   context.font = "500 16px Segoe UI, sans-serif";
   context.fillText("Captioned report video · narration is available in the interactive player", 80, 674);
   context.textAlign = "right";
@@ -3135,6 +3534,7 @@ async function exportReportVideo(button) {
 
 function openReportPlayer(data) {
   closeReportPlayer();
+  state.modalReturnFocus = document.activeElement;
   state.reportPlayerData = data;
   state.reportPlayerIndex = 0;
   state.reportNarrationEnabled = false;
@@ -3147,10 +3547,10 @@ function openReportPlayer(data) {
   player.setAttribute("tabindex", "-1");
   player.innerHTML = `
     <div class="recap-frame">
-      <header class="recap-top"><span class="recap-brand">✦ PREEMPTION <span>TEAM RECAP</span></span><span class="recap-slide-count"></span><button class="icon-btn" data-recap-close aria-label="Close recap">×</button></header>
+      <header class="recap-top"><span class="recap-brand">${icon("spark", 18)} PIN2PIN <span>TEAM RECAP</span></span><span class="recap-slide-count"></span><button class="icon-btn" data-recap-close aria-label="Close recap" title="Close recap">${icon("x", 18)}</button></header>
       <div class="recap-progress"><i></i></div>
       <main class="recap-stage"></main>
-      <footer class="recap-controls"><button class="btn btn-outline" data-recap-prev>← Previous</button><div><button class="btn btn-outline" data-recap-export>Export video</button><button class="btn btn-outline" data-recap-voice>Enable voice</button><button class="btn btn-outline" data-recap-toggle>Pause</button></div><button class="btn btn-primary" data-recap-next>Next →</button></footer>
+      <footer class="recap-controls"><button class="btn btn-outline" data-recap-prev>${icon("chevron-left", 16)} Previous</button><div><button class="btn btn-outline" data-recap-export>${icon("download", 16)} Export video</button><button class="btn btn-outline" data-recap-voice>${icon("play", 16)} Enable voice</button><button class="btn btn-outline" data-recap-toggle>${icon("pause", 16)} Pause</button></div><button class="btn btn-primary" data-recap-next>Next ${icon("chevron-right", 16)}</button></footer>
       <p class="recap-disclaimer">Video exports are captioned WebM slides without embedded audio; enable voice in the interactive player. Report content reflects recorded work only.</p>
     </div>`;
   document.body.appendChild(player);
@@ -3227,6 +3627,52 @@ function closeReportPlayer() {
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   const player = document.getElementById("reportPlayer");
   if (player) player.remove();
+  restoreModalFocus();
+}
+
+function restoreModalFocus() {
+  const target = state.modalReturnFocus;
+  state.modalReturnFocus = null;
+  if (target && target.isConnected && typeof target.focus === "function") {
+    target.focus({ preventScroll: true });
+  }
+}
+
+function handleModalKeyboard(event) {
+  if (event.key === "Escape") {
+    const taskChat = document.getElementById("taskChatOverlay");
+    const taskDetails = document.getElementById("taskDetailsOverlay");
+    const mediaPreview = document.getElementById("taskMediaPreviewOverlay");
+    const reportPlayer = document.getElementById("reportPlayer");
+    if (taskChat) taskChat.remove();
+    else if (taskDetails) taskDetails.remove();
+    else if (mediaPreview) mediaPreview.remove();
+    else if (reportPlayer) closeReportPlayer();
+    else if (document.getElementById("chatWrap")?.style.display !== "none") hideChat();
+    else return;
+    restoreModalFocus();
+    event.preventDefault();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const dialog = [...document.querySelectorAll('[role="dialog"][aria-modal="true"]')].pop();
+  if (!dialog) return;
+  const focusable = [...dialog.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter((element) => element.getClientRects().length > 0);
+  if (!focusable.length) {
+    event.preventDefault();
+    dialog.focus({ preventScroll: true });
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 async function playSavedReport(reportId) {
@@ -3264,7 +3710,7 @@ function renderModels() {
 
   document.getElementById("content").innerHTML = `
     <div class="section">
-      <div class="section-title">🧠 Model Router — Automatic Failover</div>
+      <div class="section-title">Model routing</div>
       <p style="color:var(--muted);font-size:13px;margin-bottom:14px;">
         Your agents use the provider and model selected in Configuration. If a model hits a limit,
         the router automatically tries the next model and then any other configured provider.
@@ -3281,11 +3727,11 @@ function renderModels() {
           </div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn btn-primary" id="btnSwitchModel" ${models.length ? "" : "disabled"}>🔄 Switch to Next Model</button>
-          <button class="btn btn-outline" data-goto="config">⚙️ Configure Provider</button>
+          <button class="btn btn-outline" id="btnSwitchModel" ${models.length ? "" : "disabled"}>${icon("refresh", 16)} Switch model</button>
+          <button class="btn btn-outline" data-goto="config">${icon("config", 16)} Configure provider</button>
         </div>
         <div class="router-notice" style="margin-top:12px;">
-          💡 Auto-failover is ${cfgVal("auto_failover", "1") === "0" ? "OFF" : "ON"}. Model cycling happens automatically on rate limit.
+          ${icon("spark", 16)} Auto-failover is ${cfgVal("auto_failover", "1") === "0" ? "OFF" : "ON"}. Model cycling happens automatically on rate limit.
           ${r.has_key ? "API key is configured." : "No API key is configured for this provider."}
         </div>
       </div>
@@ -3361,10 +3807,10 @@ function renderConfig() {
         </div>
         <input type="password" id="providerKey_${key}" placeholder="Paste ${esc(providerLabel(key))} API key" autocomplete="off">
         <div class="provider-actions">
-          <button class="btn btn-outline btn-sm" data-test-provider="${key}">🔑 Test & List</button>
-          <button class="btn btn-primary btn-sm" data-save-provider="${key}">💾 Save Key</button>
+          <button class="btn btn-outline btn-sm" data-test-provider="${key}">${icon("key", 14)} Test &amp; list</button>
+          <button class="btn btn-primary btn-sm" data-save-provider="${key}">${icon("lock", 14)} Save key</button>
         </div>
-        <div class="provider-link"><a href="${esc(PROVIDER_CONFIG[key].site)}" target="_blank" rel="noopener">Get a key ↗</a></div>
+        <div class="provider-link"><a href="${esc(PROVIDER_CONFIG[key].site)}" target="_blank" rel="noopener noreferrer">Get a key ${icon("arrow-up-right", 13)}</a></div>
       </div>`;
   }).join("");
 
@@ -3384,7 +3830,7 @@ function renderConfig() {
       </form>
     </div>
     <div class="section">
-      <div class="section-title">⚙️ Configuration — AI Provider</div>
+      <div class="section-title">AI provider</div>
       <p style="color:var(--muted);font-size:13px;margin-bottom:16px;">
         Click a provider card, paste its API key, click <b>Test &amp; List</b>, then choose a model and click <b>Use This Model</b>.
         The key is stored server-side; the browser never receives it back.
@@ -3404,23 +3850,23 @@ function renderConfig() {
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-primary" data-test-provider="${provider}">🔑 Test & List Models</button>
-            <button class="btn btn-outline" data-save-provider="${provider}">💾 Save Key</button>
-            ${cfgHas(`${provider}_api_key`) ? `<button class="btn btn-outline" data-clear-key="${provider}">🗑 Clear Key</button>` : ""}
+            <button class="btn btn-primary" data-test-provider="${provider}">${icon("key", 16)} Test &amp; list models</button>
+            <button class="btn btn-outline" data-save-provider="${provider}">${icon("lock", 16)} Save key</button>
+            ${cfgHas(`${provider}_api_key`) ? `<button class="btn btn-outline" data-clear-key="${provider}">${icon("trash", 16)} Clear key</button>` : ""}
           </div>
         </div>
 
         <div class="input-wrap">
           <label>${esc(providerLabel(provider))} API key</label>
           <input type="password" id="configApiKey" placeholder="${cfgHas(`${provider}_api_key`) ? "A key is saved — paste a new one to replace it" : "Paste your API key"}" autocomplete="off">
-          <div class="config-hint">Get a key at <a href="${esc(PROVIDER_CONFIG[provider].site)}" target="_blank" rel="noopener">${esc(providerLabel(provider))} ↗</a></div>
+          <div class="config-hint">Get a key at <a href="${esc(PROVIDER_CONFIG[provider].site)}" target="_blank" rel="noopener noreferrer">${esc(providerLabel(provider))} ${icon("arrow-up-right", 13)}</a></div>
         </div>
 
         <div class="input-wrap">
           <label>Model</label>
           <select id="configModelSelect">${modelOptions}</select>
         </div>
-        <button class="btn btn-primary" data-use-model="${provider}" ${models.length ? "" : "disabled"}>✅ Use This Model</button>
+        <button class="btn btn-accent" data-use-model="${provider}" ${models.length ? "" : "disabled"}>${icon("check", 16)} Use this model</button>
 
         <div class="input-wrap" style="margin-top:14px;">
           <label>Model Auto-Failover</label>
@@ -3432,7 +3878,7 @@ function renderConfig() {
 
         <div id="configTestResult" class="test-result ${test ? "test-" + test.type : ""}">${test ? esc(test.message) : ""}</div>
         <div class="router-notice" style="margin-top:12px;">
-          💡 Current active model: <b>${esc(selectedModel || mr.active_model || models[0] || "—")}</b>.
+          ${icon("spark", 16)} Current active model: <b>${esc(selectedModel || mr.active_model || models[0] || "—")}</b>.
           If a model hits its limit, the router automatically tries the next model, then any other configured provider.
         </div>
       </div>
@@ -3446,7 +3892,7 @@ function renderConfig() {
           </div>`).join("") || "<div class='empty'>No models yet — test a provider key above.</div>"}
       </div>
 
-      <div class="section-title mt-8" style="margin-bottom:8px;">🎬 Image & video generation</div>
+      <div class="section-title mt-8" style="margin-bottom:8px;">Image & video generation</div>
       <div class="card deapi-config-card">
         <div class="deapi-config-heading">
           <div><span class="provider-mark provider-mark-deapi" aria-hidden="true">dA</span><b>deAPI.ai media models</b></div>
@@ -3456,16 +3902,16 @@ function renderConfig() {
         <div class="input-wrap">
           <label>deAPI key</label>
           <input id="deapiApiKey" type="password" autocomplete="off" placeholder="${state.mediaConfig.has_key ? "A key is saved — paste a replacement to update it" : "Paste your deAPI key"}">
-          <div class="config-hint"><a href="https://app.deapi.ai/" target="_blank" rel="noopener">Open deAPI account ↗</a></div>
+          <div class="config-hint"><a href="https://app.deapi.ai/" target="_blank" rel="noopener noreferrer">Open deAPI account ${icon("arrow-up-right", 13)}</a></div>
         </div>
         <div class="provider-actions">
-          <button class="btn btn-primary" id="btnTestDeapiMedia">🔑 Test key &amp; load models</button>
+          <button class="btn btn-primary" id="btnTestDeapiMedia">${icon("key", 16)} Test key &amp; load models</button>
           ${state.mediaConfig.has_key ? `<button class="btn btn-outline" id="btnClearDeapiMedia">Disconnect deAPI</button>` : ""}
         </div>
         <div id="deapiMediaTestResult" class="test-result"></div>
         <div class="config-hint">Choose separate image and video models on the Models page. The agents first create a specific prompt, then submit it to the selected model and save the returned file.</div>
       </div>
-      <div class="section-title mt-8" style="margin-bottom:8px;">🌐 Web Research</div>
+      <div class="section-title mt-8" style="margin-bottom:8px;">Web research</div>
       <div class="card">
         <div style="font-weight:700;">Live search for research agents</div>
         <p style="color:var(--muted);font-size:13px;">
@@ -3482,13 +3928,13 @@ function renderConfig() {
           <div class="config-hint">
             Leave this optional field empty to use no-key public search. Search results are evidence candidates, not a guarantee of current or qualified profiles.
             Fully verified LinkedIn data requires manual review or approved API access; see
-            <a href="https://learn.microsoft.com/en-us/linkedin/shared/authentication/getting-access" target="_blank" rel="noopener">LinkedIn API permissions ↗</a>
-            and <a href="https://business.linkedin.com/sales-solutions/partners/become-a-partner" target="_blank" rel="noopener">Sales Navigator partner access ↗</a>.
+            <a href="https://learn.microsoft.com/en-us/linkedin/shared/authentication/getting-access" target="_blank" rel="noopener noreferrer">LinkedIn API permissions ${icon("arrow-up-right", 13)}</a>
+            and <a href="https://business.linkedin.com/sales-solutions/partners/become-a-partner" target="_blank" rel="noopener noreferrer">Sales Navigator partner access ${icon("arrow-up-right", 13)}</a>.
           </div>
         </div>
         <div class="provider-actions">
-          <button class="btn btn-primary" data-test-web-search>🔎 Test Public Search / Save Optional Key</button>
-          ${cfgHas("web_search_api_key") ? `<button class="btn btn-outline" data-clear-key="web_search">🗑 Disconnect</button>` : ""}
+          <button class="btn btn-primary" data-test-web-search>${icon("search", 16)} Test public search / save optional key</button>
+          ${cfgHas("web_search_api_key") ? `<button class="btn btn-outline" data-clear-key="web_search">${icon("trash", 16)} Disconnect</button>` : ""}
         </div>
         <div id="webSearchTestResult" class="test-result"></div>
       </div>
@@ -3566,7 +4012,7 @@ async function testProvider(provider) {
       body: { api_key: apiKey, provider },
     });
     if (!res.ok) {
-      setTestResult(provider, "❌ " + res.message, "error");
+      setTestResult(provider, "\u{274C} " + res.message, "error");
       notify(res.message, "error");
       return;
     }
@@ -3579,7 +4025,7 @@ async function testProvider(provider) {
     state.availableModels[provider] = res.available_models || [];
     setTestResult(
       provider,
-      `✅ ${res.message}${res.tested_model ? ` Tested: ${res.tested_model}` : ""}`,
+      `\u{2705} ${res.message}${res.tested_model ? ` Tested: ${res.tested_model}` : ""}`,
       "success"
     );
 
@@ -3590,9 +4036,9 @@ async function testProvider(provider) {
 
     await loadAll();
     renderActiveTab(false);
-    notify(`✅ ${providerLabel(provider)} connected — ${(res.available_models || []).length} model(s) loaded`, "success");
+    notify(`\u{2705} ${providerLabel(provider)} connected — ${(res.available_models || []).length} model(s) loaded`, "success");
   } catch (e) {
-    setTestResult(provider, "❌ " + e.message, "error");
+    setTestResult(provider, "\u{274C} " + e.message, "error");
     notify("Test failed: " + e.message, "error");
   }
 }
@@ -3763,7 +4209,7 @@ async function testWebSearch() {
       });
     }
     if (result) {
-      result.textContent = "✅ " + response.message;
+      result.textContent = "\u{2705} " + response.message;
       result.className = "test-result test-success";
     }
     input.value = "";
@@ -3772,7 +4218,7 @@ async function testWebSearch() {
     notify(apiKey ? "Optional search key saved; no-key fallback remains enabled" : "No-key public web search is available", "success");
   } catch (error) {
     if (result) {
-      result.textContent = "❌ " + error.message;
+      result.textContent = "\u{274C} " + error.message;
       result.className = "test-result test-error";
     }
     notify("Could not connect web search: " + error.message, "error");
@@ -3786,7 +4232,7 @@ async function testWebSearch() {
 function renderActivity() {
   document.getElementById("content").innerHTML = `
     <div class="section">
-      <div class="section-title">🕓 Activity Feed</div>
+      <div class="section-title">Recent activity</div>
       <div class="feed">
         ${state.activity.map((a) => feedItemHtml(a)).join("") || "<div class='empty'>No activity yet.</div>"}
       </div>
@@ -3800,6 +4246,7 @@ function renderActivity() {
 
 function setupListeners() {
   window.addEventListener("pagehide", saveLastView);
+  document.addEventListener("keydown", handleModalKeyboard);
   document.querySelectorAll(".nav-item").forEach((el) => {
     el.addEventListener("click", (e) => {
       e.preventDefault();
@@ -3874,6 +4321,13 @@ function setupListeners() {
   }
 
   const content = document.getElementById("content");
+  content.addEventListener("keydown", (event) => {
+    if (!["Enter", " "].includes(event.key)) return;
+    const card = event.target.closest(".task-card");
+    if (!card || event.target !== card || event.target.closest("button, a, summary, input, select, textarea")) return;
+    event.preventDefault();
+    openTaskDetails(card.dataset.taskId);
+  });
   content.addEventListener("click", async (e) => {
     const archiveTaskButton = e.target.closest("[data-archive-task]");
     if (archiveTaskButton) {
@@ -3943,6 +4397,7 @@ function setupListeners() {
     if (closeMediaPreview || e.target.id === "taskMediaPreviewOverlay") {
       const previewOverlay = document.getElementById("taskMediaPreviewOverlay");
       if (previewOverlay) previewOverlay.remove();
+      restoreModalFocus();
       return;
     }
 
@@ -3961,12 +4416,14 @@ function setupListeners() {
       const overlay = document.getElementById("taskDetailsOverlay");
       if (overlay) overlay.remove();
       saveLastView();
+      restoreModalFocus();
       return;
     }
 
     const closeTaskChat = e.target.closest("[data-close-task-chat]");
     if (closeTaskChat || e.target.id === "taskChatOverlay") {
       document.getElementById("taskChatOverlay")?.remove();
+      restoreModalFocus();
       return;
     }
 
