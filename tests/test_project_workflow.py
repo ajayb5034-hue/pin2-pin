@@ -342,7 +342,7 @@ class ProjectWorkflowTests(unittest.TestCase):
         })
         self.assertEqual(created.status_code, 200)
         email_id = created.json()["id"]
-        os.environ["EMAIL_SENDER_ADDRESS"] = "owner@gmail.com"
+        os.environ["EMAIL_SENDER_ADDRESS"] = "pin2pin-test@example.invalid"
         os.environ["EMAIL_APP_PASSWORD"] = "test-app-password"
         smtp = mock.MagicMock()
         smtp.__enter__.return_value = smtp
@@ -371,7 +371,7 @@ class ProjectWorkflowTests(unittest.TestCase):
             "body": "Hello.",
         })
         email_id = created.json()["id"]
-        os.environ["EMAIL_SENDER_ADDRESS"] = "owner@gmail.com"
+        os.environ["EMAIL_SENDER_ADDRESS"] = "pin2pin-test@example.invalid"
         os.environ["EMAIL_APP_PASSWORD"] = "test-app-password"
         smtp = mock.MagicMock()
         smtp.send_message.side_effect = main.smtplib.SMTPAuthenticationError(535, b"Rejected")
@@ -383,7 +383,7 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertEqual(self.client.post(f"/api/emails/{email_id}/send").status_code, 409)
 
     def test_gmail_inbox_reads_recent_messages_without_marking_them_read(self):
-        os.environ["EMAIL_SENDER_ADDRESS"] = "owner@gmail.com"
+        os.environ["EMAIL_SENDER_ADDRESS"] = "pin2pin-test@example.invalid"
         os.environ["EMAIL_APP_PASSWORD"] = "test-app-password"
         headers = (
             b"From: Jane Doe <jane@example.com>\r\n"
@@ -507,7 +507,7 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertEqual(review["decision"], "pending")
         self.assertIn("owner's approval", review["feedback"])
 
-        os.environ["EMAIL_SENDER_ADDRESS"] = "owner@gmail.com"
+        os.environ["EMAIL_SENDER_ADDRESS"] = "pin2pin-test@example.invalid"
         os.environ["EMAIL_APP_PASSWORD"] = "test-app-password"
         smtp = mock.MagicMock()
         smtp.__enter__.return_value = smtp
