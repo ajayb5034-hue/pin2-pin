@@ -1,5 +1,7 @@
 # Pin2Pin
 
+![Tests](https://github.com/ajayb5034-hue/pin2-pin/actions/workflows/tests.yml/badge.svg)
+
 Pin2Pin is a local-first AI operations dashboard. Create a company profile, assign work
 to specialist agents, schedule recurring tasks, review deliverables, and keep control of
 connected services and external actions.
