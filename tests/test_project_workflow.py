@@ -317,6 +317,9 @@ class ProjectWorkflowTests(unittest.TestCase):
         analytics_authorization = post.call_args_list[-1].kwargs["headers"]["Authorization"]
         self.assertTrue(analytics_authorization.startswith("Bearer "), "Analytics request omitted the Bearer scheme.")
         self.assertTrue(analytics_authorization.endswith("local-access-token"), "Analytics request did not use the refreshed token.")
+        report_request = post.call_args_list[-1].kwargs["json"]
+        self.assertIn({"name": "engagementRate"}, report_request["metrics"])
+        self.assertIn({"name": "totalUsers"}, report_request["metrics"])
 
     def test_explicit_analytics_tasks_receive_report_context(self):
         saved = self.client.post("/api/resources/google-analytics/connect", json={"property_id": "123456789"})
@@ -427,7 +430,7 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertEqual(fake_inbox.selected, ("INBOX", True))
         connect.assert_called_once_with("imap.gmail.com", 993, timeout=20)
 
-    def test_only_explicit_email_inbox_tasks_receive_mail_context(self):
+    def test_any_agent_can_read_gmail_for_explicit_inbox_tasks_without_web_search(self):
         self.assertTrue(main._task_requires_email_inbox(
             {"title": "Check the latest Gmail messages", "description": ""},
             "Email Sender & Receiver",
@@ -440,10 +443,13 @@ class ProjectWorkflowTests(unittest.TestCase):
             {"title": "Write an email campaign", "description": ""},
             "Email Sender & Receiver",
         ))
-        self.assertFalse(main._task_requires_email_inbox(
-            {"title": "Check the latest Gmail messages", "description": ""},
-            "Lead Generation",
-        ))
+        task = {
+            "title": "Check inbox for mailer-daemon failure notices and export addresses",
+            "description": "Check the connected Gmail inbox from mailer-daemon@googlemail.com.",
+        }
+        self.assertTrue(main._task_requires_email_inbox(task, "Data Scraping"))
+        self.assertEqual(main._task_email_sender_filter(task), "mailer-daemon@googlemail.com")
+        self.assertFalse(main._task_requires_web_research(task, "Data Scraping"))
 
     def test_email_agent_output_becomes_owner_approved_draft(self):
         output = (
@@ -759,6 +765,16 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertEqual(media_type, "application/pdf")
         self.assertTrue(content.startswith(b"%PDF-"))
 
+    def test_text_or_word_deliverables_do_not_request_media_generation(self):
+        self.assertEqual(main._requested_media_types({
+            "title": "Write an Instagram video script",
+            "description": "Save the script as a Word document. Do not generate an actual video.",
+        }), [])
+        self.assertEqual(main._requested_media_types({
+            "title": "Export a task summary",
+            "description": "Return the summary as plain text and a Word file.",
+        }), [])
+
     def test_future_prospect_strategy_runs_without_customer_sources_and_sets_grounding_rules(self):
         conn = main.get_conn()
         try:
@@ -864,6 +880,10 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertEqual(count, 0)
 
     def test_workspace_settings_validate_and_persist_folder(self):
+        automatic = self.client.get("/api/project/settings")
+        self.assertEqual(automatic.status_code, 200)
+        self.assertTrue(automatic.json()["workspace_is_default"])
+        self.assertTrue(os.path.isdir(automatic.json()["workspace_path"]))
         workspace = self._workspace()
         response = self.client.post("/api/project/settings", json={"workspace_path": workspace})
         self.assertEqual(response.status_code, 200)
@@ -1970,7 +1990,7 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertEqual(len({spec["assign_to"] for spec in selected_specs}), 7)
         self.assertIn("Engineering", [spec["assign_to"] for spec in selected_specs])
 
-    def test_suggestion_status_explains_blocked_work_and_rejects_manual_run(self):
+    def test_blocked_tasks_do_not_prevent_idle_suggestions(self):
         conn = main.get_conn()
         try:
             agent = conn.execute("SELECT id FROM agents WHERE role='Lead Generation'").fetchone()
@@ -1986,10 +2006,94 @@ class ProjectWorkflowTests(unittest.TestCase):
             conn.close()
         status = self.client.get("/api/suggestions/status")
         self.assertEqual(status.status_code, 200)
-        self.assertFalse(status.json()["can_run"])
-        self.assertIn("blocked", status.json()["blocking_tasks"])
-        response = self.client.post("/api/suggestions/run")
-        self.assertEqual(response.status_code, 409)
+        self.assertTrue(status.json()["queue_clear"])
+        self.assertEqual(status.json()["blocking_tasks"], {})
+
+    def test_assigned_tasks_still_prevent_idle_suggestions(self):
+        conn = main.get_conn()
+        try:
+            agent = conn.execute("SELECT id FROM agents WHERE role='Lead Generation'").fetchone()
+            now = main.now_iso()
+            conn.execute(
+                "INSERT INTO tasks (id,title,description,assigned_agent_id,status,priority,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                ("task_assigned_suggestions", "Assigned test work", "Wait for active work.",
+                 agent["id"], "assigned", "medium", now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        status = self.client.get("/api/suggestions/status").json()
+        self.assertFalse(status["queue_clear"])
+        self.assertIn("assigned", status["blocking_tasks"])
+        self.assertIn("assigned", status["reasons"][0])
+
+    def test_implementing_suggestion_creates_work_with_owner_modification(self):
+        conn = main.get_conn()
+        try:
+            agent = conn.execute("SELECT id FROM agents WHERE role='Lead Generation'").fetchone()
+            conn.execute(
+                "INSERT INTO agent_suggestions "
+                "(id,agent_id,agent_name,cycle,title,summary,source_urls,status,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                ("suggestion_implement", agent["id"], "Lead Gen", 1, "Improve lead qualification",
+                 "Research target segments.", "[]", "open", main.now_iso()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        response = self.client.post(
+            "/api/suggestions/suggestion_implement/implement",
+            json={"execution_mode": "deliverable", "modification": "Include a short risk section."},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        conn = main.get_conn()
+        try:
+            task = conn.execute(
+                "SELECT description,execution_mode,status FROM tasks WHERE id=?",
+                (response.json()["task_id"],),
+            ).fetchone()
+            suggestion = conn.execute(
+                "SELECT status FROM agent_suggestions WHERE id='suggestion_implement'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIn("Research target segments.", task["description"])
+        self.assertIn("Include a short risk section.", task["description"])
+        self.assertEqual(task["status"], "assigned")
+        self.assertEqual(suggestion["status"], "task_created")
+
+    def test_project_suggestion_routes_to_engineering_in_detected_workspace(self):
+        conn = main.get_conn()
+        try:
+            agent = conn.execute("SELECT id FROM agents WHERE role='Lead Generation'").fetchone()
+            conn.execute(
+                "INSERT INTO agent_suggestions "
+                "(id,agent_id,agent_name,cycle,title,summary,source_urls,status,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                ("suggestion_project", agent["id"], "Lead Gen", 1, "Fix dashboard rendering",
+                 "Implement the responsive dashboard adjustment.", "[]", "open", main.now_iso()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        with mock.patch.object(main.shutil, "which", return_value="C:\\tools\\codex.exe"):
+            response = self.client.post(
+                "/api/suggestions/suggestion_project/implement",
+                json={"execution_mode": "project"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        conn = main.get_conn()
+        try:
+            task = conn.execute(
+                "SELECT execution_mode,assigned_agent_id FROM tasks WHERE id=?",
+                (response.json()["task_id"],),
+            ).fetchone()
+            engineer = conn.execute("SELECT id FROM agents WHERE name='Engineering'").fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(task["execution_mode"], "project")
+        self.assertEqual(task["assigned_agent_id"], engineer["id"])
 
     def test_telegram_posts_are_verified_and_require_approval(self):
         class FakeResponse:
@@ -2141,7 +2245,7 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertEqual(task["status"], "assigned")
         self.assertEqual(task["role"], "Software Engineering")
 
-    def test_project_task_requires_a_saved_workspace(self):
+    def test_project_task_uses_the_automatically_detected_workspace(self):
         with mock.patch.object(main.shutil, "which", return_value="C:\\tools\\codex.exe"):
             response = self.client.post(
                 "/api/tasks",
@@ -2151,7 +2255,9 @@ class ProjectWorkflowTests(unittest.TestCase):
                     "execution_mode": "project",
                 },
             )
-        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "assigned")
+        self.assertTrue(os.path.isdir(self.client.get("/api/project/settings").json()["workspace_path"]))
 
     def test_project_chat_request_is_routed_to_engineering(self):
         specs = main._task_intent_fallback("Find bugs and fix them in this project")
