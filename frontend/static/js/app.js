@@ -218,6 +218,8 @@ const state = {
   tasks: [],
   archivedTasks: [],
   showArchivedTasks: false,
+  showEmptyBoardColumns: false,
+  showAllDoneTasks: false,
   messages: [],
   accounts: [],
   emails: [],
@@ -262,6 +264,7 @@ const state = {
   profile: { dashboard_name: "Pin2Pin", owner_name: "", company_name: "", complete: false },
   operations: { paused: false, active_tasks: 0, tasks_awaiting_review: 0 },
   chatReceiver: "CEO",
+  chatDrafts: { team: {}, project: "", task: {} },
   replyToMessageId: null,
   taskChatTaskId: null,
   taskChatMessages: [],
@@ -278,6 +281,7 @@ const state = {
   reportPlayerData: null,
   reportNarrationEnabled: false,
   modalReturnFocus: null,
+  bottomPanelCollapsed: null,
 };
 
 const ROLE_COLOR = {
@@ -1026,8 +1030,15 @@ function highlightNav(tab) {
 
 function goToTab(tab) {
   if (!TAB_CONTENT[tab]) return;
+  const activeElement = document.activeElement;
+  if (activeElement && activeElement.id === "chatInput" && activeElement.value) {
+    state.chatDrafts.team[state.chatReceiver || "CEO"] = activeElement.value;
+  } else if (activeElement && activeElement.id === "projectChatInput" && activeElement.value) {
+    state.chatDrafts.project = activeElement.value;
+  }
   state.activeTab = tab;
   renderActiveTab(false);
+  renderBottomPanel();
   saveLastView();
 }
 
@@ -1036,9 +1047,25 @@ function goToTab(tab) {
 /* ------------------------------------------------------------------ */
 
 function renderBottomPanel() {
+  const container = document.getElementById("bottomPanelContainer");
   const strip = document.getElementById("agentStrip");
   const feed = document.getElementById("logFeed");
-  if (!strip || !feed) return;
+  if (!container || !strip || !feed) return;
+  if (state.bottomPanelCollapsed === null) {
+    try {
+      state.bottomPanelCollapsed = localStorage.getItem("pin2pin:live-team-status-collapsed") !== "false";
+    } catch (error) {
+      state.bottomPanelCollapsed = true;
+    }
+  }
+  container.hidden = state.activeTab === "dashboard";
+  container.classList.toggle("collapsed", state.bottomPanelCollapsed);
+  const workingCount = state.agents.filter((agent) => agent.status === "working").length;
+  const idleCount = state.agents.filter((agent) => agent.status === "idle").length;
+  const summary = document.getElementById("bottomPanelSummary");
+  if (summary) {
+    summary.textContent = `${workingCount} working · ${idleCount} idle`;
+  }
 
   strip.innerHTML = state.agents.map((a) => {
     let cls = "idle";
@@ -1070,16 +1097,26 @@ function renderBottomPanel() {
     </div>`).join("") || "<div class='empty'>No activity yet.</div>";
 
   const btn = document.getElementById("btnBottomCollapse");
+  if (btn) {
+    btn.setAttribute("aria-expanded", String(!state.bottomPanelCollapsed));
+    btn.setAttribute("aria-label", state.bottomPanelCollapsed ? "Expand live team status" : "Collapse live team status");
+    btn.title = state.bottomPanelCollapsed ? "Expand live team status" : "Collapse live team status";
+  }
   if (btn && !btn.dataset.wired) {
     btn.dataset.wired = "1";
     btn.addEventListener("click", () => {
-      const container = document.getElementById("bottomPanelContainer");
-      if (!container) return;
-      container.classList.toggle("collapsed");
-      const collapsed = container.classList.contains("collapsed");
+      state.bottomPanelCollapsed = !state.bottomPanelCollapsed;
+      container.classList.toggle("collapsed", state.bottomPanelCollapsed);
+      const collapsed = state.bottomPanelCollapsed;
       btn.innerHTML = icon("chevron-down", 18);
       btn.setAttribute("aria-expanded", String(!collapsed));
+      btn.setAttribute("aria-label", collapsed ? "Expand live team status" : "Collapse live team status");
       btn.title = collapsed ? "Expand live team status" : "Collapse live team status";
+      try {
+        localStorage.setItem("pin2pin:live-team-status-collapsed", String(collapsed));
+      } catch (error) {
+        console.warn("Could not save live team status preference:", error.message);
+      }
     });
   }
 }
@@ -1238,11 +1275,12 @@ function renderSuggestions() {
     <section class="suggestions-hero">
       <div class="eyebrow">IDLE-TIME RESEARCH</div>
       <h2>Good ideas, only when work is clear.</h2>
-      <p>When backlog, to-do, in-progress, review, and blocked work are all clear, each specialist checks recent chat and public web sources once. Suggestions stop until new work is created.</p>
+      <p>When there are no backlog, assigned, or in-progress tasks, each specialist checks recent chat and public sources once. Suggestions stop until new work is created.</p>
       <div class="suggestion-run-state">${running ? `<span class="live-pulse"></span>${running} specialist${running === 1 ? "" : "s"} researching` : ready.length ? `${ready.length} fresh suggestion${ready.length === 1 ? "" : "s"} to review` : status.can_run ? "Queue clear. Agents are ready to research once." : reasons[0] || "Research cycle complete."}</div>
       <div class="suggestion-availability">${Number(status.processed_agents || 0)} / ${Number(status.total_agents || 0)} agents attempted this cycle</div>
       ${reasons.length > 1 ? `<ul class="suggestion-blockers">${reasons.map((reason) => `<li>${esc(reason)}</li>`).join("")}</ul>` : ""}
       <button class="btn btn-accent btn-sm" id="btnRunSuggestions" ${status.can_run ? "" : "disabled"}>${icon("spark", 16)} Research now</button>
+      ${!status.can_run && reasons.length ? `<p class="suggestion-disabled-reason">${esc(reasons[0])}</p>` : ""}
     </section>
     <div class="suggestion-grid">
       ${suggestions.map((item) => {
@@ -1256,7 +1294,11 @@ function renderSuggestions() {
             const safeUrl = safeExternalUrl(url);
             return `<li>${safeUrl ? `<a href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>` : esc(url)}</li>`;
           }).join("")}</ul></details>` : ""}
-          ${item.status === "open" ? `<div class="suggestion-actions"><button class="btn btn-primary btn-sm" data-suggestion-task="${esc(item.id)}">Add as task</button><button class="btn btn-outline btn-sm" data-suggestion-dismiss="${esc(item.id)}">Dismiss</button></div>` : ""}
+          ${item.status === "open" ? `<div class="suggestion-implementation">
+            <label>Changes or details to include (optional)<textarea data-suggestion-modification="${esc(item.id)}" maxlength="4000" rows="3" placeholder="Add your requirements before starting this work"></textarea></label>
+            <label>How should the team do this?<select data-suggestion-mode="${esc(item.id)}"><option value="deliverable">Prepare a deliverable</option><option value="project">Make code changes in my project</option></select></label>
+            <div class="suggestion-actions"><button class="btn btn-primary btn-sm" data-suggestion-implement="${esc(item.id)}">Implement</button><button class="btn btn-outline btn-sm" data-suggestion-dismiss="${esc(item.id)}">Reject</button></div>
+          </div>` : ""}
         </article>`;
       }).join("") || `<div class="surface-panel empty-state">No suggestions have been generated yet. The agents will each research once after all queued, active, and review tasks have cleared.</div>`}
     </div>
@@ -1419,27 +1461,27 @@ function taskEtaText(task) {
   const eta = task.estimated_remaining_seconds;
   if (task.status !== "in_progress") return "";
   if (task.taking_longer_than_estimate) {
-    return `Taking longer than usual (typical run: ${formatTaskDuration(task.estimated_duration_seconds)}).`;
+    return `Past the typical run time of ${formatTaskDuration(task.estimated_duration_seconds)}; remaining time is uncertain.`;
   }
   if (eta === null || eta === undefined) return "ETA unavailable";
-  return `About ${formatTaskDuration(eta)} remaining (estimate).`;
+  return `Estimated time remaining: about ${formatTaskDuration(eta)}.`;
 }
 
 function taskProgressHtml(task) {
   if (!task.progress_summary && !["assigned", "in_progress", "waiting_engineering"].includes(task.status)) return "";
   const active = task.status === "in_progress";
-  const showTrack = active || ["review", "done", "blocked"].includes(task.status);
-  const percent = active
-    ? Math.max(3, Math.min(99, Number(task.progress_percent || 3)))
-    : Math.max(0, Math.min(100, Number(task.progress_percent || (["review", "done"].includes(task.status) ? 100 : 0))));
+  const showTrack = active || ["review", "done"].includes(task.status);
+  const measured = task.progress_is_measured === true
+    && Number.isFinite(Number(task.display_progress_percent));
+  const percent = Math.max(0, Math.min(100, Number(task.display_progress_percent || 0)));
   const etaText = active ? taskEtaText(task) : "";
   const summary = task.progress_summary
     || (task.status === "assigned"
     ? `Queued for ${task.agent_name || "the assigned agent"}; waiting for the worker to start.`
     : "Waiting for Engineering to return the implementation.");
   return `<div class="task-live-progress${active ? " is-active" : ""}" data-progress-for="${esc(task.id)}">
-    <div class="task-progress-heading"><b>${active ? "Live progress" : esc(statusLabel(task.status))}</b>${showTrack ? `<span>${percent}%</span>` : ""}</div>
-    ${showTrack ? `<div class="task-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><i style="width:${percent}%"></i></div>` : ""}
+    <div class="task-progress-heading"><b>${active ? (measured ? "Measured progress" : "Work in progress") : esc(statusLabel(task.status))}</b>${showTrack && measured ? `<span>${percent}%</span>` : ""}</div>
+    ${showTrack ? `<div class="task-progress-track${measured ? "" : " is-indeterminate"}" role="progressbar" aria-label="${measured ? `Task progress: ${percent}%` : "Task progress is being reported"}"${measured ? ` aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"` : ` aria-valuetext="${esc(summary)}"`}><i ${measured ? `style="width:${percent}%"` : ""}></i></div>` : ""}
     <p>${esc(summary)}</p>
     ${etaText ? `<small>${esc(etaText)}</small>` : ""}
     </div>`;
@@ -1604,11 +1646,15 @@ function taskCardHtml(t, compact = false) {
        </div>`
     : ["done", "rejected", "blocked"].includes(t.status)
       ? `<div class="task-actions">
-           ${t.status === "blocked" ? `<button class="btn btn-outline btn-sm" data-retry-task="${esc(t.id)}">${icon("refresh", 16)} Retry task</button>` : ""}
-           <button class="btn btn-primary btn-sm" data-task-chat="${esc(t.id)}">${icon("chat", 16)} Discuss / resume</button>
+           ${t.status === "blocked" ? `<button class="btn btn-ghost btn-sm" data-retry-task="${esc(t.id)}">${icon("refresh", 16)} Retry</button>` : ""}
+           <button class="btn btn-ghost btn-sm" data-task-chat="${esc(t.id)}">${icon("chat", 16)} Discuss</button>
+           ${canArchive && !isArchived ? `<button class="btn btn-ghost btn-sm" data-archive-task="${esc(t.id)}">${icon("folder", 16)} Hide</button>` : ""}
          </div>`
       : "";
   const taskType = t.execution_mode === "project" ? '<span class="task-type">Project change</span>' : "";
+  const priority = ["high", "urgent"].includes(String(t.priority || "").toLowerCase())
+    ? `<span class="task-priority-pill">${esc(t.priority)}</span>`
+    : "";
   return `
     <div class="task-card${needs}${prio}${isArchived ? " task-card-archived" : ""}" data-task-id="${esc(t.id)}" data-status="${esc(t.status)}" tabindex="0">
       <div class="task-agent">${agentName} <span class="tag tag-${esc(t.status)}">${esc(statusLabel(t.status))}</span>${isArchived ? `<span class="task-archived-label">Archived</span>` : ""}</div>
@@ -1619,9 +1665,8 @@ function taskCardHtml(t, compact = false) {
       ${taskProgressHtml(t)}
       ${output}
       ${actions}
-      ${canArchive && !isArchived ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-archive-task="${esc(t.id)}">Hide from board</button></div>` : ""}
       ${isArchived ? `<div class="task-actions"><button class="btn btn-outline btn-sm" data-restore-task="${esc(t.id)}">Restore to board</button></div>` : ""}
-      <div class="task-meta"><span>Priority: ${esc(t.priority)}</span><span>${t.needs_approval ? `${icon("warning", 14)} Needs your approval` : (t.status === "done" ? `${icon("check", 14)} Complete` : (t.execution_mode === "project" ? `${icon("code", 14)} Changes applied in project` : "—"))}</span></div>
+      <div class="task-meta">${priority}${t.needs_approval ? `<span>${icon("warning", 14)} Needs your approval</span>` : t.status === "done" ? `<span>${icon("check", 14)} Complete</span>` : t.execution_mode === "project" ? `<span>${icon("code", 14)} Changes applied in project</span>` : ""}</div>
     </div>`;
 }
 
@@ -1675,12 +1720,32 @@ function taskChatMessageHtml(message) {
     : null;
   const text = esc(message.content).replace(/\n/g, "<br>");
   return `<div class="msg ${isOwner ? "me" : "them"}">
-    <div style="font-weight:700;font-size:12px;margin-bottom:2px;">${isOwner ? "You" : esc(message.sender)}</div>
+    <div style="font-weight:700;font-size:13px;margin-bottom:2px;">${isOwner ? "You" : esc(message.sender)}</div>
     ${parent ? `<div class="msg-quoted"><b>${parent.sender === "user" ? "You" : esc(parent.sender)}</b> · ${esc(parent.content.slice(0, 180))}</div>` : ""}
     ${text}
     <span class="msg-time">${new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
     <button class="msg-reply" type="button" data-reply-task-message="${esc(message.id)}">↩ Reply</button>
   </div>`;
+}
+
+function bindMultilineComposer(input, submit, onDraftChange) {
+  if (!input || input.dataset.multilineWired) return;
+  input.dataset.multilineWired = "1";
+  const resize = () => {
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
+  };
+  input.addEventListener("input", () => {
+    onDraftChange(input.value);
+    resize();
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      submit();
+    }
+  });
+  resize();
 }
 
 async function openTaskChat(taskId) {
@@ -1706,7 +1771,7 @@ async function openTaskChat(taskId) {
         <p class="task-chat-hint">This chat is scoped to this task. Ask about the blocker or output, or say “resume from last” / “apply this change” to continue the same task.</p>
         <div class="task-chat-messages" id="taskChatMessages">${state.taskChatMessages.map(taskChatMessageHtml).join("") || `<div class="empty-state">No task discussion yet. Ask a question or describe what should change.</div>`}</div>
         <form class="task-chat-input" id="taskChatForm">
-          <input id="taskChatInput" maxlength="4000" autocomplete="off" placeholder="Discuss this task, or ask to resume it…">
+          <textarea id="taskChatInput" maxlength="4000" rows="2" placeholder="Discuss this task, or ask to resume it… (Ctrl+Enter to send)">${esc((state.chatDrafts.task || {})[taskId] || "")}</textarea>
           <button class="btn btn-primary" type="submit">Send</button>
         </form>
       </section>`;
@@ -1726,7 +1791,12 @@ async function openTaskChat(taskId) {
       input.placeholder = parent ? `Replying to ${parent.sender}: ${parent.content.slice(0, 70)}` : "Discuss this task…";
       input.focus({ preventScroll: true });
     });
-    overlay.querySelector("#taskChatInput").focus({ preventScroll: true });
+    const taskInput = overlay.querySelector("#taskChatInput");
+    bindMultilineComposer(taskInput, sendTaskChatMessage, (value) => {
+      state.chatDrafts.task[taskId] = value;
+    });
+    taskInput.focus({ preventScroll: true });
+    taskInput.setSelectionRange(taskInput.value.length, taskInput.value.length);
   } catch (error) {
     notify("Could not open task conversation: " + error.message, "error");
   }
@@ -1736,8 +1806,10 @@ async function sendTaskChatMessage() {
   const input = document.getElementById("taskChatInput");
   if (!input || !input.value.trim() || !state.taskChatTaskId) return;
   const content = input.value.trim();
+  const taskId = state.taskChatTaskId;
   const replyToId = state.taskChatReplyToId;
   input.value = "";
+  state.chatDrafts.task[taskId] = "";
   input.disabled = true;
   try {
     const response = await fetchJson(`/api/tasks/${encodeURIComponent(state.taskChatTaskId)}/chat`, {
@@ -1756,6 +1828,7 @@ async function sendTaskChatMessage() {
     await loadAll();
   } catch (error) {
     input.value = content;
+    state.chatDrafts.task[taskId] = content;
     notify("Could not send task message: " + error.message, "error");
   } finally {
     input.disabled = false;
@@ -1784,7 +1857,7 @@ function renderTeam() {
   document.getElementById("content").innerHTML = `
     <div class="section">
       <div class="section-title">Team members</div>
-      <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Click any agent to see their tasks, outputs, messages and activity.</p>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:12px;">Click any agent to see their tasks, outputs, messages and activity.</p>
       <div class="agent-grid">${state.agents.map((a) => agentCardHtml(a, true)).join("")}</div>
     </div>
 
@@ -2050,15 +2123,16 @@ async function deleteAgent(agentId) {
 function renderProject() {
   const project = state.project || {};
   const ready = !!project.codex_available;
+  const workspaceValid = project.workspace_valid !== false;
   document.getElementById("content").innerHTML = `
     <div class="section">
       <div class="section-title">${icon("code", 18)} Let the team work in your project</div>
       <p class="project-intro">Choose the project folder once. Project tasks are assigned to Engineering, which uses the installed Codex CLI to read, edit, and test files in that folder instead of returning suggestions only.</p>
       <div class="card project-setup-card">
         <div class="input-wrap">
-          <label for="projectWorkspace">Project folder path</label>
-          <input id="projectWorkspace" type="text" spellcheck="false" placeholder="C:\\path\\to\\your\\project" value="${esc(project.workspace_path || "")}">
-          <div class="config-hint">Use an absolute local path. Changes are limited by Codex's workspace-write sandbox; the agent is instructed not to commit or deploy.</div>
+          <label for="projectWorkspace">Project folder path${project.workspace_is_default ? " (automatically detected)" : ""}</label>
+          <input id="projectWorkspace" type="text" spellcheck="false" aria-invalid="${workspaceValid ? "false" : "true"}" placeholder="C:\\path\\to\\your\\project" value="${esc(project.workspace_path || "")}">
+          <div class="config-hint">${workspaceValid ? "Pin2Pin selects its project folder automatically. You can enter another absolute local path. Engineering uses a workspace-write sandbox and is instructed not to commit or deploy." : "The saved project folder is unavailable. Choose a valid local folder or restore the automatically detected folder."}</div>
         </div>
         <div class="project-runtime ${ready ? "runtime-ready" : "runtime-missing"}">
           <span class="runtime-dot"></span>
@@ -2066,7 +2140,7 @@ function renderProject() {
         </div>
         <div class="project-actions">
           <button class="btn btn-primary" id="btnSaveWorkspace">Save project folder</button>
-          <button class="btn btn-outline" id="btnClearWorkspace" ${project.workspace_path ? "" : "disabled"}>Clear folder</button>
+          <button class="btn btn-outline" id="btnClearWorkspace" ${project.workspace_is_default ? "disabled" : ""}>Use automatic folder</button>
           <button class="btn btn-outline" data-goto="tasks">Open task board</button>
         </div>
         ${!ready ? `<div class="notice-card project-notice"><div><b>Install Codex CLI and sign in</b><div class="config-hint">Project execution needs a working local Codex CLI installation. Text deliverables continue to use your configured AI provider.</div></div></div>` : ""}
@@ -2086,7 +2160,7 @@ function renderProject() {
           <header><div><div class="eyebrow">PRIVATE WORKSPACE CHAT</div><h3>Engineering <span>↔ You</span></h3></div></header>
           <div class="project-chat-messages" id="projectChatMessages">${state.projectMessages.map(projectMessageHtml).join("") || `<div class="empty-state">Ask Engineering about code, a task run, or any line in the logs.</div>`}</div>
           <form class="project-chat-input" id="projectChatForm">
-            <input id="projectChatInput" maxlength="4000" autocomplete="off" placeholder="Ask Engineering about this project…">
+            <textarea id="projectChatInput" maxlength="4000" rows="2" placeholder="Ask Engineering about this project… (Ctrl+Enter to send)">${esc(state.chatDrafts.project)}</textarea>
             <button class="btn btn-primary" type="submit">Send</button>
           </form>
         </section>
@@ -2101,6 +2175,14 @@ function renderProject() {
     event.preventDefault();
     sendProjectChatMessage();
   });
+  const projectInput = document.getElementById("projectChatInput");
+  if (projectInput) {
+    bindMultilineComposer(projectInput, sendProjectChatMessage, (value) => { state.chatDrafts.project = value; });
+    if (state.chatDrafts.project) {
+      projectInput.focus({ preventScroll: true });
+      projectInput.setSelectionRange(projectInput.value.length, projectInput.value.length);
+    }
+  }
   document.getElementById("projectChatMessages").addEventListener("click", (event) => {
     const reply = event.target.closest("[data-reply-project-message]");
     if (!reply) return;
@@ -2116,7 +2198,9 @@ function renderProject() {
     const input = document.getElementById("projectChatInput");
     if (input) {
       input.value = `Explain this Engineering log line and what it means for the task "${ask.dataset.taskTitle}":\n${ask.dataset.askLog}`;
+      state.chatDrafts.project = input.value;
       input.focus({ preventScroll: true });
+      input.setSelectionRange(input.value.length, input.value.length);
     }
   });
   const refresh = document.querySelector("[data-refresh-project-panels]");
@@ -2133,7 +2217,7 @@ function projectMessageHtml(message) {
     ? state.projectMessages.find((item) => item.id === message.reply_to_id)
     : null;
   return `<div class="msg ${message.sender === "user" ? "me" : "them"}">
-    <div style="font-weight:700;font-size:12px;margin-bottom:2px;">${message.sender === "user" ? "You" : esc(message.sender)}</div>
+    <div style="font-weight:700;font-size:13px;margin-bottom:2px;">${message.sender === "user" ? "You" : esc(message.sender)}</div>
     ${parent ? `<div class="msg-quoted"><b>${parent.sender === "user" ? "You" : esc(parent.sender)}</b> · ${esc(parent.content.slice(0, 180))}</div>` : ""}
     ${esc(message.content).replace(/\n/g, "<br>")}
     <span class="msg-time">${new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
@@ -2183,6 +2267,7 @@ async function sendProjectChatMessage() {
   if (!input || !input.value.trim()) return;
   const content = input.value.trim();
   input.value = "";
+  state.chatDrafts.project = "";
   input.disabled = true;
   try {
     const data = await fetchJson("/api/project/chat", {
@@ -2195,6 +2280,7 @@ async function sendProjectChatMessage() {
     await refreshProjectPanels();
   } catch (error) {
     input.value = content;
+    state.chatDrafts.project = content;
     notify("Engineering chat failed: " + error.message, "error");
   } finally {
     input.disabled = false;
@@ -2212,7 +2298,7 @@ async function saveProjectWorkspace(clear) {
     });
     state.project = project;
     renderActiveTab(true);
-    notify(clear ? "Project folder cleared" : "Project folder saved", "success");
+    notify(clear ? "Automatic project folder restored" : "Project folder saved", "success");
   } catch (e) {
     notify("Could not save project folder: " + e.message, "error");
   }
@@ -2229,6 +2315,15 @@ function renderTasksBoard() {
     { key: "rejected", title: "Rejected" },
     { key: "blocked", title: "Blocked" },
   ];
+  const pinnedColumns = new Set(["assigned", "in_progress", "done"]);
+  const emptyOptionalColumns = cols.filter((col) =>
+    !pinnedColumns.has(col.key) && !state.tasks.some((task) => task.status === col.key)
+  );
+  const visibleColumns = cols.filter((col) =>
+    pinnedColumns.has(col.key)
+    || state.showEmptyBoardColumns
+    || state.tasks.some((task) => task.status === col.key)
+  );
   const workerOptions = state.agents
     .filter((a) => a.role !== "Chief Executive Officer")
     .map((a) => `<option value="${esc(a.id)}">${esc(a.name)}</option>`)
@@ -2247,7 +2342,6 @@ function renderTasksBoard() {
         <button class="btn btn-outline btn-sm" id="toggleArchivedTasks">${state.showArchivedTasks ? "Hide archived" : "Show archived"}</button>
       </div>
       <details class="create-task-panel">
-        <summary>${icon("plus", 16)} Assign a new task</summary>
         <div class="card" style="max-width:640px;margin-top:10px;">
           <div class="input-wrap">
             <label>Task title</label>
@@ -2285,13 +2379,24 @@ function renderTasksBoard() {
           <button class="btn btn-accent" id="btnBoardCreate">${icon("plus", 16)} Create task</button>
         </div>
       </details>
+      ${emptyOptionalColumns.length ? `<div class="empty-board-columns">
+        <span>Empty: ${emptyOptionalColumns.map((col) => esc(col.title)).join(", ")}</span>
+        <button class="btn btn-ghost btn-sm" id="toggleEmptyBoardColumns">${state.showEmptyBoardColumns ? "Hide empty columns" : "Show empty columns"}</button>
+      </div>` : ""}
       <div class="board">
-        ${cols.map((col) => {
-          const tasks = state.tasks.filter((t) => t.status === col.key);
+        ${visibleColumns.map((col) => {
+          const allColumnTasks = state.tasks
+            .filter((t) => t.status === col.key)
+            .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
+          const tasks = col.key === "done" && !state.showAllDoneTasks
+            ? allColumnTasks.slice(0, 5)
+            : allColumnTasks;
           return `
             <div class="board-col" data-board-status="${esc(col.key)}">
-              <div class="board-col-header"><span>${col.title}</span><span class="board-col-count">${tasks.length}</span></div>
-              <div class="board-col-body">${tasks.map((t) => taskCardHtml(t, true)).join("") || "<div class='empty'>—</div>"}</div>
+              <div class="board-col-header"><span>${col.title}</span><span class="board-col-count">${allColumnTasks.length}</span></div>
+              <div class="board-col-body">${tasks.map((t) => taskCardHtml(t, true)).join("") || "<div class='empty'>No tasks here yet.</div>"}
+                ${col.key === "done" && allColumnTasks.length > 5 ? `<button class="btn btn-ghost btn-sm" id="toggleDoneTasks">${state.showAllDoneTasks ? "Show fewer" : `Show all (${allColumnTasks.length})`}</button>` : ""}
+              </div>
             </div>`;
         }).join("")}
       </div>
@@ -2317,6 +2422,16 @@ function renderTasksBoard() {
   const search = document.getElementById("taskSearch");
   const statusFilter = document.getElementById("taskStatusFilter");
   const archivedToggle = document.getElementById("toggleArchivedTasks");
+  const emptyColumnsToggle = document.getElementById("toggleEmptyBoardColumns");
+  if (emptyColumnsToggle) emptyColumnsToggle.addEventListener("click", () => {
+    state.showEmptyBoardColumns = !state.showEmptyBoardColumns;
+    renderActiveTab(true);
+  });
+  const doneTasksToggle = document.getElementById("toggleDoneTasks");
+  if (doneTasksToggle) doneTasksToggle.addEventListener("click", () => {
+    state.showAllDoneTasks = !state.showAllDoneTasks;
+    renderActiveTab(true);
+  });
   if (archivedToggle) archivedToggle.addEventListener("click", async () => {
     if (!state.showArchivedTasks) {
       try {
@@ -2335,6 +2450,11 @@ function renderTasksBoard() {
   const filterTasks = () => {
     const query = (search ? search.value : "").trim().toLowerCase();
     const status = statusFilter ? statusFilter.value : "";
+    if (status && !document.querySelector(`[data-board-status="${CSS.escape(status)}"]`)) {
+      state.showEmptyBoardColumns = true;
+      renderActiveTab(true);
+      return;
+    }
     document.querySelectorAll(".board-col").forEach((column) => {
       let visible = 0;
       column.querySelectorAll(".task-card").forEach((card) => {
@@ -2344,11 +2464,13 @@ function renderTasksBoard() {
         if (!card.hidden) visible += 1;
       });
       const count = column.querySelector(".board-col-count");
-      if (count) count.textContent = visible;
+      const total = state.tasks.filter((task) => task.status === column.dataset.boardStatus).length;
+      if (count) count.textContent = !query && !status ? total : visible;
     });
   };
   if (search) search.addEventListener("input", filterTasks);
   if (statusFilter) statusFilter.addEventListener("change", filterTasks);
+  filterTasks();
 }
 
 async function createBoardTask() {
@@ -2426,7 +2548,7 @@ function renderChatTab() {
       </div>
       <div class="msg-list" id="msgList">${messages}${typing}</div>
       <div class="chat-input-wrap">
-        <input type="text" id="chatInput" placeholder="Message the team… (e.g. 'assign me a task', 'what's my status?')">
+        <textarea id="chatInput" rows="2" maxlength="4000" placeholder="Message the team… (Enter for a new line; Ctrl+Enter to send)">${esc(state.chatDrafts.team[receiver] || "")}</textarea>
         <button class="btn btn-primary btn-sm" id="chatSend">Send</button>
       </div>
     </div>
@@ -2454,12 +2576,15 @@ function renderChatTab() {
   const send = document.getElementById("chatSend");
   if (send) send.addEventListener("click", () => sendChat("tab"));
   const input = document.getElementById("chatInput");
-  if (input) input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendChat("tab");
+  if (input) {
+    bindMultilineComposer(input, () => sendChat("tab"), (value) => {
+      state.chatDrafts.team[receiver] = value;
+    });
+    if (state.chatDrafts.team[receiver]) {
+      input.focus({ preventScroll: true });
+      input.setSelectionRange(input.value.length, input.value.length);
     }
-  });
+  }
 }
 
 function buildReceiverOptions() {
@@ -2478,7 +2603,7 @@ function messageHtml(m, conversation = state.messages) {
   const body = esc(m.content).replace(/\n/g, "<br>");
   const parent = m.reply_to_id ? conversation.find((message) => message.id === m.reply_to_id) : null;
   return `<div class="${cls}">
-    <div style="font-weight:700;font-size:12px;margin-bottom:2px;">${name}</div>
+    <div style="font-weight:700;font-size:13px;margin-bottom:2px;">${name}</div>
     ${parent ? `<div class="msg-quoted"><b>${esc(parent.sender === "user" ? "You" : parent.sender)}</b> · ${esc(parent.content.slice(0, 180))}</div>` : ""}
     ${body}
     <span class="msg-time">${time}</span>
@@ -2509,6 +2634,12 @@ async function sendChat(source) {
   if (!text) return;
 
   input.value = "";
+  state.chatDrafts.team[receiver] = "";
+  const otherComposer = document.getElementById(source === "fixed" ? "chatInput" : "chatInputFixed");
+  if (otherComposer && (!document.getElementById(source === "fixed" ? "chatReceiverLive" : "chatReceiverFixed")
+    || (document.getElementById(source === "fixed" ? "chatReceiverLive" : "chatReceiverFixed").value === receiver))) {
+    otherComposer.value = "";
+  }
   state.chatReceiver = receiver;
   state.busy.chat = true;
 
@@ -2617,11 +2748,8 @@ function renderFixedChat(preserve = false) {
   const input = document.getElementById("chatInputFixed");
   if (input && !input.dataset.wired) {
     input.dataset.wired = "1";
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        sendChat("fixed");
-      }
+    bindMultilineComposer(input, () => sendChat("fixed"), (value) => {
+      state.chatDrafts.team[(document.getElementById("chatReceiverFixed") || {}).value || state.chatReceiver || "CEO"] = value;
     });
   }
 }
@@ -3105,7 +3233,7 @@ function renderFiles() {
         <div style="font-weight:700;margin-bottom:6px;">Upload a file (Excel, PPT, Word, PDF, image, video, text)</div>
         <input type="file" id="fileUploadInput" multiple>
         <label for="fileUploadInput" class="btn btn-primary btn-sm" style="display:inline-flex;margin-top:8px;">Browse files</label>
-        <div style="margin-top:8px;font-size:12px;color:var(--muted);">Drag files here or click to browse. Files are stored locally and shown to the team.</div>
+        <div style="margin-top:8px;font-size:13px;color:var(--muted);">Drag files here or click to browse. Files are stored locally and shown to the team.</div>
       </div>
       <section class="files-group">
         <div class="section-title mt-8">Uploaded by you <span class="files-count">${userFiles.length}</span></div>
@@ -3723,7 +3851,7 @@ function renderModels() {
           </div>
           <div style="text-align:right;">
             <div style="font-weight:700;font-size:13px;color:var(--primary);">${models.length ? `#${(r.index % models.length) + 1} of ${models.length}` : "No models"}</div>
-            <div style="font-size:12px;color:var(--muted);">Provider: ${esc(r.provider_label || r.provider || "—")}</div>
+            <div style="font-size:13px;color:var(--muted);">Provider: ${esc(r.provider_label || r.provider || "—")}</div>
           </div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -3844,7 +3972,7 @@ function renderConfig() {
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
           <div>
             <div style="font-weight:700;">${esc(providerLabel(provider))} (${esc(provider)})</div>
-            <div style="font-size:12px;color:var(--muted);">
+            <div style="font-size:13px;color:var(--muted);">
               ${models.length} model(s) • Key: ${cfgHas(`${provider}_api_key`) ? "saved" : "not saved"} •
               Auto-failover: ${cfgVal("auto_failover", "1") === "0" ? "Disabled" : "Enabled"}
             </div>
@@ -4521,18 +4649,24 @@ function setupListeners() {
       return;
     }
 
-    const suggestionTask = e.target.closest("[data-suggestion-task]");
-    if (suggestionTask) {
+    const suggestionImplement = e.target.closest("[data-suggestion-implement]");
+    if (suggestionImplement) {
+    const suggestionId = suggestionImplement.getAttribute("data-suggestion-implement");
+    const modification = document.querySelector(`[data-suggestion-modification="${CSS.escape(suggestionId)}"]`);
+    const mode = document.querySelector(`[data-suggestion-mode="${CSS.escape(suggestionId)}"]`);
       try {
-        await fetchJson(`/api/suggestions/${suggestionTask.getAttribute("data-suggestion-task")}/create-task`, {
+      await fetchJson(`/api/suggestions/${suggestionId}/implement`, {
           method: "POST",
-          body: {},
+        body: {
+          modification: modification ? modification.value.trim() : "",
+          execution_mode: mode ? mode.value : "deliverable",
+        },
         });
         await loadAll();
         renderActiveTab(false);
-        notify("Suggestion added to the task board", "success");
+      notify("Suggestion is now in the task queue", "success");
       } catch (err) {
-        notify("Could not create task: " + err.message, "error");
+      notify("Could not start this suggestion: " + err.message, "error");
       }
       return;
     }
@@ -4547,7 +4681,7 @@ function setupListeners() {
         await loadAll();
         renderActiveTab(false);
       } catch (err) {
-        notify("Could not dismiss suggestion: " + err.message, "error");
+        notify("Could not reject suggestion: " + err.message, "error");
       }
       return;
     }
