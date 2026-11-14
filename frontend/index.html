@@ -38,8 +38,8 @@
         <span class="user-avatar" id="ownerAvatarLabel">P</span>
         <span class="user-name" id="ownerNameLabel">Set up profile</span>
       </div>
-      <button class="btn btn-outline" id="btnPauseWork" type="button" aria-pressed="false"><span data-icon="pause"></span><span class="button-label">Pause work</span></button>
-      <button class="btn btn-primary" id="btnRefreshTop"><span data-icon="refresh"></span><span class="button-label">Refresh</span></button>
+      <button class="btn btn-outline" id="btnPauseWork" type="button" aria-label="Pause work" aria-pressed="false"><span data-icon="pause"></span><span class="button-label">Pause work</span></button>
+      <button class="btn btn-primary" id="btnRefreshTop" aria-label="Refresh dashboard"><span data-icon="refresh"></span><span class="button-label">Refresh</span></button>
     </div>
   </header>
 
@@ -123,7 +123,7 @@
       <header class="page-header">
         <h1 class="page-title" id="pageTitle">Dashboard</h1>
         <div class="page-actions">
-          <button class="btn btn-primary" id="btnRefresh"><span data-icon="refresh"></span><span class="button-label">Refresh</span></button>
+          <button class="btn btn-primary" id="btnRefresh" hidden><span data-icon="refresh"></span><span class="button-label">Refresh</span></button>
           <button class="btn btn-outline" id="btnCeoBriefing"><span data-icon="spark"></span><span class="button-label">Ask CEO</span></button>
           <button class="btn btn-outline" id="btnWeeklyReport"><span data-icon="reports"></span><span class="button-label">Team recap</span></button>
         </div>
@@ -134,8 +134,9 @@
       <!-- Live team status + activity strip -->
       <div class="bottom-panel" id="bottomPanelContainer">
         <div class="bottom-panel-head">
-          <span>Live Team Status</span>
-          <button class="icon-btn" id="btnBottomCollapse" title="Collapse panel" aria-label="Collapse live team status" aria-expanded="true"><span data-icon="chevron-down"></span></button>
+          <span>Live team status</span>
+          <span class="bottom-panel-summary" id="bottomPanelSummary" aria-live="polite"></span>
+          <button class="icon-btn" id="btnBottomCollapse" title="Expand live team status" aria-label="Expand live team status" aria-expanded="false"><span data-icon="chevron-down"></span></button>
         </div>
         <div class="bottom-panel-body">
           <div class="agent-status-strip" id="agentStrip"></div>
@@ -161,7 +162,7 @@
       <div class="chat-messages" id="chatMessages"></div>
       <div class="chat-input-wrap">
         <select id="chatReceiverFixed" class="chat-select"></select>
-        <input type="text" id="chatInputFixed" placeholder="Message the team…">
+        <textarea id="chatInputFixed" rows="2" maxlength="4000" placeholder="Message the team… (Enter for a new line; Ctrl+Enter to send)"></textarea>
         <button class="btn btn-primary btn-sm chat-send-button" id="chatSendFixed" aria-label="Send" title="Send"><span data-icon="send"></span></button>
       </div>
     </div>
