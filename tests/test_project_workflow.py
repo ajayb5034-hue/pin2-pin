@@ -3078,7 +3078,7 @@ class ProjectWorkflowTests(unittest.TestCase):
             output = asyncio.run(main._run_project_task(row))
 
         self.assertIn("Tests passed: 4", output)
-        self.assertEqual(call["cwd"], workspace)
+        self.assertTrue(os.path.samefile(call["cwd"], workspace))
         self.assertIn("--sandbox", call["args"])
         self.assertIn("workspace-write", call["args"])
         self.assertIn("--ephemeral", call["args"])
