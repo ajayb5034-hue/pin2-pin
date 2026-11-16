@@ -22,9 +22,18 @@ connected services and external actions.
   publishing a connected Telegram post.
 - Uses real configured model providers; it does not simulate model results.
 
-## Dashboard preview
+## Screenshots
 
-![Pin2Pin dashboard preview](docs/screenshot.png)
+These screenshots use fictional demo agents and tasks; they contain no account or
+workspace data.
+
+| Dashboard | Task Board |
+|---|---|
+| ![Pin2Pin dashboard](docs/screenshot.png) | ![Pin2Pin task board](docs/task-board.png) |
+
+| Team | Configuration |
+|---|---|
+| ![Pin2Pin team page](docs/team.png) | ![Pin2Pin configuration page](docs/configuration.png) |
 
 ## Run on Windows
 
@@ -98,6 +107,7 @@ From the project root:
 ```powershell
 .\venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
 node --check frontend/static/js/app.js
+node --test tests/frontend
 ```
 
 The tests use temporary databases and mock external services; they do not require
