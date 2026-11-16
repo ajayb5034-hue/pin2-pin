@@ -665,6 +665,93 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertIn("active_kept", {task["id"] for task in tasks})
         self.assertEqual(len(self.client.get("/api/tasks?include_archived=true").json()), 28)
 
+    def test_stats_overview_zero_fills_and_clamps_requested_days(self):
+        response = self.client.get("/api/stats/overview?days=0")
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(data["days"], 1)
+        self.assertEqual(data["daily"], [{
+            "date": datetime.now().astimezone().date().isoformat(),
+            "created": 0,
+            "completed": 0,
+            "blocked": 0,
+        }])
+        self.assertEqual(len(data["activity_by_hour"]), 7)
+        self.assertEqual([len(row) for row in data["activity_by_hour"]], [24] * 7)
+        self.assertTrue(all(value == 0 for row in data["activity_by_hour"] for value in row))
+
+        maximum = self.client.get("/api/stats/overview?days=999")
+        self.assertEqual(maximum.status_code, 200, maximum.text)
+        self.assertEqual(maximum.json()["days"], 90)
+        self.assertEqual(len(maximum.json()["daily"]), 90)
+
+    def test_stats_overview_aggregates_without_returning_task_text(self):
+        conn = main.get_conn()
+        try:
+            agent = conn.execute("SELECT id,name FROM agents WHERE role='Lead Generation'").fetchone()
+            today = datetime.now().astimezone()
+            created = (today - timedelta(days=2)).isoformat()
+            started = (today - timedelta(hours=2)).isoformat()
+            completed = (today - timedelta(hours=1)).isoformat()
+            conn.execute(
+                "INSERT INTO tasks (id,title,description,assigned_agent_id,status,priority,created_at,updated_at,started_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                ("stats_done", "PRIVATE_TASK_TITLE", "PRIVATE_TASK_DESCRIPTION", agent["id"], "done",
+                 "medium", created, completed, started),
+            )
+            conn.execute(
+                "INSERT INTO task_history (id,task_id,title,agent_name,status,output,created_at,finished_at,duration_seconds) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                ("history_stats_done", "stats_done", "PRIVATE_TASK_TITLE", agent["name"], "done",
+                 "PRIVATE_TASK_OUTPUT", created, completed, 3600),
+            )
+            conn.execute(
+                "INSERT INTO tasks (id,title,description,assigned_agent_id,status,priority,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                ("stats_blocked", "BLOCKED_PRIVATE_TITLE", "BLOCKED_PRIVATE_DESCRIPTION", agent["id"],
+                 "blocked", "high", created, today.isoformat()),
+            )
+            conn.execute(
+                "INSERT INTO tasks (id,title,description,assigned_agent_id,status,priority,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                ("stats_open", "OPEN_PRIVATE_TITLE", "OPEN_PRIVATE_DESCRIPTION", agent["id"],
+                 "in_progress", "medium", created, today.isoformat()),
+            )
+            archived = (today - timedelta(days=30)).isoformat()
+            conn.execute(
+                "INSERT INTO tasks (id,title,description,assigned_agent_id,status,priority,created_at,updated_at,archived_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                ("stats_archived", "ARCHIVED_PRIVATE_TITLE", "ARCHIVED_PRIVATE_DESCRIPTION", agent["id"],
+                 "done", "low", archived, archived, today.isoformat()),
+            )
+            conn.execute(
+                "INSERT INTO activity (id,actor,action,detail,timestamp) VALUES (?,?,?,?,?)",
+                ("stats_activity", "Lead Gen", "completed_work", "PRIVATE_ACTIVITY_DETAIL", completed),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        response = self.client.get("/api/stats/overview?days=14")
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        today_key = today.date().isoformat()
+        today_row = next(row for row in data["daily"] if row["date"] == today_key)
+        self.assertEqual(today_row["completed"], 1)
+        self.assertEqual(today_row["blocked"], 1)
+        self.assertEqual(today_row["created"], 0)
+        self.assertEqual(data["status_counts"]["done"], 1)
+        self.assertEqual(data["status_counts"]["blocked"], 1)
+        self.assertEqual(data["status_counts"]["in_progress"], 1)
+        self.assertEqual(sum(data["status_counts"].values()), 3)
+        agent_stats = next(row for row in data["by_agent"] if row["agent_id"] == agent["id"])
+        self.assertEqual(agent_stats["open"], 2)
+        self.assertEqual(agent_stats["completed"], 1)
+        self.assertEqual(agent_stats["median_cycle_seconds"], 3600)
+        self.assertNotIn("PRIVATE_", response.text)
+        self.assertNotIn("BLOCKED_PRIVATE", response.text)
+        self.assertNotIn("OPEN_PRIVATE", response.text)
+
     def test_accepted_engineering_collaboration_awards_one_peer_star_once(self):
         conn = main.get_conn()
         try:
@@ -2064,6 +2151,13 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertEqual(suggestion["status"], "task_created")
 
     def test_project_suggestion_routes_to_engineering_in_detected_workspace(self):
+        settings = self.client.get("/api/project/settings").json()
+        confirmed = self.client.post(
+            "/api/project/settings",
+            json={"workspace_path": settings["workspace_path"]},
+        )
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+
         conn = main.get_conn()
         try:
             agent = conn.execute("SELECT id FROM agents WHERE role='Lead Generation'").fetchone()
@@ -2245,7 +2339,7 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.assertEqual(task["status"], "assigned")
         self.assertEqual(task["role"], "Software Engineering")
 
-    def test_project_task_uses_the_automatically_detected_workspace(self):
+    def test_project_task_requires_confirmation_of_the_automatically_detected_workspace(self):
         with mock.patch.object(main.shutil, "which", return_value="C:\\tools\\codex.exe"):
             response = self.client.post(
                 "/api/tasks",
@@ -2255,9 +2349,30 @@ class ProjectWorkflowTests(unittest.TestCase):
                     "execution_mode": "project",
                 },
             )
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["status"], "assigned")
-        self.assertTrue(os.path.isdir(self.client.get("/api/project/settings").json()["workspace_path"]))
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("Confirm a project folder", response.json()["detail"])
+        settings = self.client.get("/api/project/settings").json()
+        self.assertTrue(settings["workspace_is_default"])
+        self.assertFalse(settings["workspace_configured"])
+        self.assertTrue(os.path.isdir(settings["workspace_path"]))
+
+        confirmed = self.client.post(
+            "/api/project/settings",
+            json={"workspace_path": settings["workspace_path"]},
+        )
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        self.assertTrue(confirmed.json()["workspace_configured"])
+        with mock.patch.object(main.shutil, "which", return_value="C:\\tools\\codex.exe"):
+            retried = self.client.post(
+                "/api/tasks",
+                json={
+                    "title": "Fix a project bug",
+                    "description": "Implement the fix.",
+                    "execution_mode": "project",
+                },
+            )
+        self.assertEqual(retried.status_code, 200, retried.text)
+        self.assertEqual(retried.json()["status"], "assigned")
 
     def test_project_chat_request_is_routed_to_engineering(self):
         specs = main._task_intent_fallback("Find bugs and fix them in this project")
