@@ -74,6 +74,8 @@ os.makedirs(CREDENTIALS_DIR, exist_ok=True)
 os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
 load_dotenv(DOTENV_PATH, override=False)
 _conversation_archive_lock = threading.Lock()
+_stats_cache: dict[tuple[str, int], tuple[float, dict]] = {}
+_stats_cache_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Provider Configuration - All 8 Cloud AI Providers
@@ -1563,6 +1565,7 @@ def get_project_settings():
     return {
         "workspace_path": workspace,
         "workspace_is_default": not configured_workspace,
+        "workspace_configured": bool(configured_workspace),
         "workspace_valid": bool(workspace and os.path.isdir(workspace)),
         "codex_available": bool(shutil.which("codex")),
         "codex_command": shutil.which("codex") or "",
@@ -1577,8 +1580,7 @@ def _default_project_workspace() -> str:
 
 def _project_workspace() -> str:
     configured_workspace = get_config("project_workspace", "").strip()
-    workspace = configured_workspace or _default_project_workspace()
-    return os.path.realpath(os.path.expanduser(os.path.expandvars(workspace))) if workspace else ""
+    return os.path.realpath(os.path.expanduser(os.path.expandvars(configured_workspace))) if configured_workspace else ""
 
 
 @app.post("/api/project/settings")
@@ -2264,6 +2266,11 @@ def create_task(task: TaskIn):
     if task.priority not in ("low", "medium", "high"):
         raise HTTPException(status_code=422, detail="Priority must be low, medium, or high.")
     if task.execution_mode == "project":
+        if not get_config("project_workspace", "").strip():
+            raise HTTPException(
+                status_code=409,
+                detail="Confirm a project folder in Project Workspace before creating a project task.",
+            )
         workspace = _project_workspace()
         if not workspace or not os.path.isdir(workspace):
             raise HTTPException(status_code=409, detail="Choose a valid project folder in Project Workspace before creating a project task.")
@@ -5271,6 +5278,11 @@ def _implement_suggestion(suggestion_id: str, payload: SuggestionImplementIn) ->
         raise HTTPException(status_code=422, detail="Suggestion changes must be 4000 characters or fewer.")
     if payload.execution_mode not in ("deliverable", "project"):
         raise HTTPException(status_code=422, detail="Implementation type must be 'deliverable' or 'project'.")
+    if payload.execution_mode == "project" and not get_config("project_workspace", "").strip():
+        raise HTTPException(
+            status_code=409,
+            detail="Confirm a project folder in Project Workspace before implementing code changes.",
+        )
     if payload.execution_mode == "project":
         workspace = _project_workspace()
         if not workspace or not os.path.isdir(workspace):
@@ -5354,6 +5366,183 @@ def pending_approvals():
 # ---------------------------------------------------------------------------
 # Activity / Logs
 # ---------------------------------------------------------------------------
+
+def _stats_local_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed.astimezone() if parsed.tzinfo else parsed.astimezone()
+
+
+def _stats_median(values: list[float]) -> Optional[float]:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def _build_stats_overview(days: int) -> dict:
+    cache_key = (os.path.abspath(DB_PATH), days)
+    now = time.monotonic()
+    with _stats_cache_lock:
+        cached = _stats_cache.get(cache_key)
+        if cached and now - cached[0] < 5:
+            return cached[1]
+
+    today = datetime.now().astimezone().date()
+    first_day = today - timedelta(days=days - 1)
+    activity_first_day = today - timedelta(days=13)
+    daily = {
+        (first_day + timedelta(days=index)).isoformat(): {
+            "date": (first_day + timedelta(days=index)).isoformat(),
+            "created": 0,
+            "completed": 0,
+            "blocked": 0,
+        }
+        for index in range(days)
+    }
+
+    conn = get_conn()
+    try:
+        task_rows = conn.execute(
+            "SELECT id,assigned_agent_id,status,created_at,started_at,updated_at,archived_at "
+            "FROM tasks"
+        ).fetchall()
+        agent_rows = conn.execute("SELECT id,name FROM agents WHERE is_active=1").fetchall()
+        history_rows = conn.execute(
+            "SELECT h.task_id,h.agent_name,h.status,h.finished_at,"
+            "t.assigned_agent_id,t.started_at,a.name AS current_agent_name "
+            "FROM task_history h LEFT JOIN tasks t ON t.id=h.task_id "
+            "LEFT JOIN agents a ON a.id=t.assigned_agent_id "
+            "WHERE h.status IN ('done','blocked')"
+        ).fetchall()
+        activity_rows = conn.execute("SELECT timestamp FROM activity").fetchall()
+    finally:
+        conn.close()
+
+    tasks = [dict(row) for row in task_rows]
+    status_counts = {
+        "backlog": 0,
+        "assigned": 0,
+        "in_progress": 0,
+        "waiting_engineering": 0,
+        "review": 0,
+        "done": 0,
+        "rejected": 0,
+        "blocked": 0,
+    }
+    active_statuses = {"backlog", "assigned", "in_progress", "waiting_engineering", "review", "blocked"}
+    for task in tasks:
+        status = task.get("status")
+        if not task.get("archived_at") and status in status_counts:
+            status_counts[status] += 1
+        created_at = _stats_local_datetime(task.get("created_at"))
+        if created_at and first_day <= created_at.date() <= today:
+            daily[created_at.date().isoformat()]["created"] += 1
+
+    completed_history_ids: set[str] = set()
+    blocked_history_ids: set[str] = set()
+    by_agent_data: dict[tuple[str, str], dict] = {}
+    cycle_seconds: dict[tuple[str, str], list[float]] = {}
+
+    def agent_bucket(agent_id: Optional[str], agent_name: Optional[str]) -> tuple[str, str]:
+        name = str(agent_name or "Unassigned")
+        identifier = str(agent_id or "")
+        return identifier, name
+
+    for agent in agent_rows:
+        key = agent_bucket(agent["id"], agent["name"])
+        by_agent_data[key] = {"agent_id": key[0], "agent_name": key[1], "open": 0, "completed": 0}
+        cycle_seconds[key] = []
+    for task in tasks:
+        if not task.get("archived_at") and task.get("status") in active_statuses:
+            agent = next((item for item in agent_rows if item["id"] == task.get("assigned_agent_id")), None)
+            key = agent_bucket(task.get("assigned_agent_id"), agent["name"] if agent else None)
+            by_agent_data.setdefault(key, {"agent_id": key[0], "agent_name": key[1], "open": 0, "completed": 0})
+            by_agent_data[key]["open"] += 1
+            cycle_seconds.setdefault(key, [])
+
+    for row in history_rows:
+        item = dict(row)
+        task_id = str(item.get("task_id") or "")
+        status = item.get("status")
+        finished_at = _stats_local_datetime(item.get("finished_at"))
+        if status == "done":
+            completed_history_ids.add(task_id)
+        else:
+            blocked_history_ids.add(task_id)
+        if not finished_at:
+            continue
+        day_key = finished_at.date().isoformat()
+        if day_key in daily:
+            daily[day_key]["completed" if status == "done" else "blocked"] += 1
+        if status != "done" or not first_day <= finished_at.date() <= today:
+            continue
+        key = agent_bucket(
+            item.get("assigned_agent_id"),
+            item.get("current_agent_name") or item.get("agent_name"),
+        )
+        by_agent_data.setdefault(key, {"agent_id": key[0], "agent_name": key[1], "open": 0, "completed": 0})
+        by_agent_data[key]["completed"] += 1
+        started_at = _stats_local_datetime(item.get("started_at"))
+        if started_at and finished_at >= started_at:
+            cycle_seconds.setdefault(key, []).append((finished_at - started_at).total_seconds())
+
+    for task in tasks:
+        status = task.get("status")
+        if status not in ("done", "blocked"):
+            continue
+        task_id = str(task.get("id") or "")
+        if status == "done" and task_id in completed_history_ids:
+            continue
+        if status == "blocked" and task_id in blocked_history_ids:
+            continue
+        finished_at = _stats_local_datetime(task.get("updated_at"))
+        if not finished_at:
+            continue
+        day_key = finished_at.date().isoformat()
+        if day_key in daily:
+            daily[day_key]["completed" if status == "done" else "blocked"] += 1
+        if status == "done" and first_day <= finished_at.date() <= today:
+            agent = next((item for item in agent_rows if item["id"] == task.get("assigned_agent_id")), None)
+            key = agent_bucket(task.get("assigned_agent_id"), agent["name"] if agent else None)
+            by_agent_data.setdefault(key, {"agent_id": key[0], "agent_name": key[1], "open": 0, "completed": 0})
+            by_agent_data[key]["completed"] += 1
+            started_at = _stats_local_datetime(task.get("started_at"))
+            if started_at and finished_at >= started_at:
+                cycle_seconds.setdefault(key, []).append((finished_at - started_at).total_seconds())
+
+    for key, bucket in by_agent_data.items():
+        bucket["median_cycle_seconds"] = _stats_median(cycle_seconds.get(key, []))
+
+    activity_by_hour = [[0 for _ in range(24)] for _ in range(7)]
+    for row in activity_rows:
+        event_at = _stats_local_datetime(row["timestamp"])
+        if event_at and activity_first_day <= event_at.date() <= today:
+            activity_by_hour[event_at.weekday()][event_at.hour] += 1
+
+    result = {
+        "days": days,
+        "daily": list(daily.values()),
+        "by_agent": sorted(by_agent_data.values(), key=lambda item: (-item["open"], -item["completed"], item["agent_name"].casefold())),
+        "status_counts": status_counts,
+        "activity_by_hour": activity_by_hour,
+    }
+    with _stats_cache_lock:
+        _stats_cache[cache_key] = (time.monotonic(), result)
+    return result
+
+
+@app.get("/api/stats/overview")
+def stats_overview(days: int = 14):
+    return _build_stats_overview(max(1, min(90, int(days))))
+
 
 @app.get("/api/activity")
 def list_activity(limit: int = 100):
