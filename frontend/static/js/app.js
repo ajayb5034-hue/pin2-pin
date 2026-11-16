@@ -232,6 +232,7 @@ const state = {
   suggestions: [],
   suggestionStatus: null,
   activity: [],
+  stats: null,
   files: [],
   weeklyReports: [],
   config: [],
@@ -384,7 +385,7 @@ function renderOperationsPauseControl() {
 }
 
 async function loadAll() {
-  const [agents, agentSchedules, tasks, messages, accounts, emails, contentPosts, ideas, approvals, suggestions, suggestionStatus, activity, files, reports, router, mediaConfig, configRes, health, project, operations, profile] =
+  const [agents, agentSchedules, tasks, messages, accounts, emails, contentPosts, ideas, approvals, suggestions, suggestionStatus, activity, stats, files, reports, router, mediaConfig, configRes, health, project, operations, profile] =
     await Promise.allSettled([
       fetchJson("/api/agents"),
       fetchJson("/api/agent-schedules"),
@@ -398,6 +399,7 @@ async function loadAll() {
       fetchJson("/api/suggestions"),
       fetchJson("/api/suggestions/status"),
       fetchJson("/api/activity?limit=60"),
+      fetchJson("/api/stats/overview?days=14"),
       fetchJson("/api/files"),
       fetchJson("/api/weekly-reports"),
       fetchJson("/api/model-router"),
@@ -422,6 +424,7 @@ async function loadAll() {
   state.suggestions = val(suggestions, []) || [];
   state.suggestionStatus = val(suggestionStatus, null);
   state.activity = val(activity, []) || [];
+  state.stats = val(stats, null);
   state.files = val(files, []) || [];
   state.weeklyReports = val(reports, []) || [];
   state.config = val(configRes, []) || [];
@@ -507,6 +510,42 @@ function formatBytes(n) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function dashboardMetrics(stats, tasks = []) {
+  const statuses = ["backlog", "assigned", "in_progress", "waiting_engineering", "review", "done", "rejected", "blocked"];
+  const fallbackCounts = {};
+  (Array.isArray(tasks) ? tasks : []).forEach((task) => {
+    fallbackCounts[task.status] = (fallbackCounts[task.status] || 0) + 1;
+  });
+  const sourceCounts = stats && stats.status_counts && typeof stats.status_counts === "object"
+    ? stats.status_counts
+    : fallbackCounts;
+  const statusCounts = Object.fromEntries(statuses.map((status) => [
+    status,
+    Math.max(0, Number(sourceCounts[status]) || 0),
+  ]));
+  const daily = Array.isArray(stats && stats.daily) ? stats.daily : [];
+  const activity = Array.isArray(stats && stats.activity_by_hour) ? stats.activity_by_hour : [];
+  const total = statuses.reduce((sum, status) => sum + statusCounts[status], 0);
+  return {
+    statusCounts,
+    total,
+    completionPercent: total ? Math.round(statusCounts.done / total * 100) : 0,
+    dailyCreated: daily.map((row) => Math.max(0, Number(row.created) || 0)),
+    dailyCompleted: daily.map((row) => Math.max(0, Number(row.completed) || 0)),
+    dailyBlocked: daily.map((row) => Math.max(0, Number(row.blocked) || 0)),
+    dayLabels: daily.map((row) => {
+      const match = /^\d{4}-\d{2}-\d{2}$/.test(String(row.date || ""));
+      return match
+        ? new Date(`${row.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "short" })
+        : "";
+    }),
+    activityByHour: Array.from({ length: 7 }, (_, day) =>
+      Array.from({ length: 24 }, (_, hour) => Math.max(0, Number(activity[day] && activity[day][hour]) || 0))
+    ),
+    byAgent: Array.isArray(stats && stats.by_agent) ? stats.by_agent : [],
+  };
+}
+
 function chartPoints(values, width = 112, height = 36) {
   const numbers = values.map((value) => Number(value) || 0);
   const max = Math.max(1, ...numbers);
@@ -546,7 +585,7 @@ function ringProgress(done, total) {
   const percent = count ? Math.min(100, complete / count * 100) : 0;
   const circumference = 2 * Math.PI * 52;
   const offset = circumference * (1 - percent / 100);
-  return `<div class="progress-ring" role="img" aria-label="${complete} of ${count} tasks done today" style="--ring-offset:${offset.toFixed(1)}px"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="ring-track" cx="60" cy="60" r="52"/><circle class="ring-value" cx="60" cy="60" r="52"/></svg><span><b>${complete}/${count}</b><small>${count ? "done today" : "no tasks today"}</small></span></div>`;
+  return `<div class="progress-ring" role="img" aria-label="${complete} of ${count} tasks completed" style="--ring-offset:${offset.toFixed(1)}px"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="ring-track" cx="60" cy="60" r="52"/><circle class="ring-value" cx="60" cy="60" r="52"/></svg><span><b>${complete}/${count}</b><small>${count ? "completed" : "no tasks yet"}</small></span></div>`;
 }
 
 function hbarList(rows) {
@@ -575,6 +614,32 @@ function stackedBar(segments) {
     return shape;
   }).join("");
   return `<div class="chart-stack-wrap"><svg class="chart-stack" viewBox="0 0 320 32" role="img" aria-label="${esc(rows.map((segment) => `${segment.label}: ${segment.value}`).join(", "))}"><rect x="4" y="8" width="312" height="16" rx="8" fill="var(--track)"/><clipPath id="pipelineClip"><rect x="4" y="8" width="312" height="16" rx="8"/></clipPath><g clip-path="url(#pipelineClip)">${bars}</g></svg><div class="chart-legend">${rows.map((segment) => `<span><i class="legend-${esc(segment.token)}"></i>${esc(segment.label)} <b>${Number(segment.value)}</b></span>`).join("")}</div></div>`;
+}
+
+function activityHeatmap(activityByHour) {
+  const rows = Array.isArray(activityByHour) ? activityByHour : [];
+  const values = rows.flatMap((row) => Array.isArray(row) ? row : []);
+  const max = Math.max(0, ...values.map((value) => Number(value) || 0));
+  if (!max) return `<div class="chart-empty-note">No recent activity has been recorded yet.</div>`;
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  return `<div class="activity-heatmap" role="img" aria-label="Recent activity by weekday and hour">${days.map((day, dayIndex) =>
+    `<div class="activity-heatmap-row"><span>${day}</span><div>${Array.from({ length: 24 }, (_, hour) => {
+      const count = Number(rows[dayIndex] && rows[dayIndex][hour]) || 0;
+      const level = count ? Math.max(0.16, count / max) : 0;
+      return `<i style="--heat:${level.toFixed(2)}" title="${day} ${String(hour).padStart(2, "0")}:00 · ${count} events"></i>`;
+    }).join("")}</div></div>`
+  ).join("")}<div class="activity-heatmap-scale"><span>Less</span><i></i><i></i><i></i><i></i><span>More</span></div></div>`;
+}
+
+function agentPerformanceList(rows) {
+  const agents = (Array.isArray(rows) ? rows : []).filter((row) => Number(row.open) || Number(row.completed));
+  if (!agents.length) return `<div class="chart-empty-note">Agent throughput will appear as tasks are completed.</div>`;
+  const max = Math.max(1, ...agents.map((row) => Number(row.completed) || 0));
+  return `<div class="agent-performance-list">${agents.slice(0, 6).map((agent) => {
+    const completed = Math.max(0, Number(agent.completed) || 0);
+    const width = completed ? Math.max(3, completed / max * 100) : 0;
+    return `<div class="agent-performance-row"><div><b>${esc(agent.agent_name)}</b><span>${Number(agent.open) || 0} open · ${completed} completed</span></div><i><em style="width:${width}%"></em></i></div>`;
+  }).join("")}</div>`;
 }
 
 function cfgRow(key) {
@@ -1126,51 +1191,19 @@ function renderBottomPanel() {
 /* ------------------------------------------------------------------ */
 
 function renderDashboard() {
-  const byStatus = {};
-  state.tasks.forEach((t) => {
-    byStatus[t.status] = (byStatus[t.status] || 0) + 1;
-  });
+  const metrics = dashboardMetrics(state.stats, state.tasks);
+  const byStatus = metrics.statusCounts;
   const working = state.agents.filter((a) => a.status === "working").length;
   const pending = state.approvals.filter((a) => a.status === "pending").length;
-  const active = state.tasks.filter((t) => ["assigned", "in_progress", "waiting_engineering"].includes(t.status)).length;
+  const active = ["assigned", "in_progress", "waiting_engineering"].reduce((sum, status) => sum + byStatus[status], 0);
   const done = byStatus.done || 0;
   const blocked = byStatus.blocked || 0;
-  const completion = state.tasks.length ? Math.round((done / state.tasks.length) * 100) : 0;
+  const completion = metrics.completionPercent;
   const connectedResources = state.accounts.filter((a) => a.status === "connected").length;
   const suggestions = (state.suggestions || []).filter((item) => item.status === "open");
-  const todayKey = new Date().toDateString();
-  const todayTasks = state.tasks.filter((task) => {
-    const createdToday = task.created_at && new Date(task.created_at).toDateString() === todayKey;
-    const activeToday = ["backlog", "assigned", "in_progress", "waiting_engineering", "review"].includes(task.status)
-      && task.updated_at && new Date(task.updated_at).toDateString() === todayKey;
-    return createdToday || activeToday;
-  });
-  const doneToday = todayTasks.filter((task) => task.status === "done"
-    && task.updated_at && new Date(task.updated_at).toDateString() === todayKey).length;
-  const dailyTaskCounts = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date();
-    date.setHours(0, 0, 0, 0);
-    date.setDate(date.getDate() - (6 - index));
-    const key = date.toDateString();
-    return state.tasks.filter((task) => {
-      const timestamp = task.created_at || task.updated_at;
-      return timestamp && new Date(timestamp).toDateString() === key;
-    }).length;
-  });
-  const dailyDoneCounts = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date();
-    date.setHours(0, 0, 0, 0);
-    date.setDate(date.getDate() - (6 - index));
-    const key = date.toDateString();
-    return state.tasks.filter((task) => task.status === "done"
-      && task.updated_at && new Date(task.updated_at).toDateString() === key).length;
-  });
-  const dayLabels = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date();
-    date.setHours(0, 0, 0, 0);
-    date.setDate(date.getDate() - (6 - index));
-    return date.toLocaleDateString(undefined, { weekday: "short" });
-  });
+  const dailyTaskCounts = metrics.dailyCreated;
+  const dailyDoneCounts = metrics.dailyCompleted;
+  const dayLabels = metrics.dayLabels;
   const recentActiveTasks = state.tasks
     .filter((task) => ["assigned", "in_progress", "waiting_engineering", "review", "blocked"].includes(task.status))
     .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))
@@ -1194,7 +1227,7 @@ function renderDashboard() {
           <button class="btn btn-ghost" data-goto="team">Meet your team</button>
         </div>
       </div>
-      <div class="hero-orbit">${ringProgress(doneToday, todayTasks.length)}</div>
+      <div class="hero-orbit">${ringProgress(done, metrics.total)}</div>
       <div class="hero-status"><span class="live-pulse"></span>${working ? `${working} agent${working === 1 ? "" : "s"} working` : active ? `${active} task${active === 1 ? "" : "s"} in motion` : "Ready for the next task"}</div>
     </section>
 
@@ -1202,8 +1235,8 @@ function renderDashboard() {
     ${blocked ? `<div class="notice-card warning-notice"><div><b>${blocked} blocked task${blocked === 1 ? "" : "s"}</b><div class="config-hint">See each task for the blocker and retry once it is fixed.</div></div><button class="btn btn-outline" data-goto="tasks">Review tasks</button></div>` : ""}
 
     <div class="metric-grid">
-      <article class="metric-card"><div class="metric-top"><span>In motion</span>${iconTile("activity", 28, "soft")}</div><div class="metric-value-row"><strong>${active}</strong></div><div class="metric-foot">${working} agents active</div></article>
-      <article class="metric-card"><div class="metric-top"><span>Completed</span>${iconTile("check", 28, "soft")}</div><div class="metric-value-row"><strong>${done}</strong>${sparkline(dailyDoneCounts, "Tasks completed each day this week")}</div><div class="metric-foot">${completion}% of all tasks</div><div class="mini-progress"><i style="width:${completion}%"></i></div></article>
+      <article class="metric-card"><div class="metric-top"><span>In motion</span>${iconTile("activity", 28, "soft")}</div><div class="metric-value-row"><strong>${active}</strong></div><div class="metric-foot">${working} agent${working === 1 ? "" : "s"} active</div></article>
+      <article class="metric-card"><div class="metric-top"><span>Completed</span>${iconTile("check", 28, "soft")}</div><div class="metric-value-row"><strong>${done}</strong>${sparkline(dailyDoneCounts, "Tasks completed each day over the last two weeks")}</div><div class="metric-foot">${completion}% of all tasks</div><div class="mini-progress"><i style="width:${completion}%"></i></div></article>
       <article class="metric-card"><div class="metric-top"><span>Awaiting review</span>${iconTile("clock", 28, "soft")}</div><div class="metric-value-row"><strong>${pending}</strong></div><div class="metric-foot">${pending ? "External actions stay gated" : "No approvals waiting"}</div></article>
       <article class="metric-card"><div class="metric-top"><span>Connected resources</span>${iconTile("link", 28, "soft")}</div><div class="metric-value-row"><strong>${connectedResources}</strong></div><div class="metric-foot">${state.files.length} shared files</div></article>
     </div>
@@ -1247,7 +1280,16 @@ function renderDashboard() {
           { label: "Rejected", value: byStatus.rejected || 0, token: "chart-muted" },
           { label: "Blocked", value: byStatus.blocked || 0, token: "chart-danger" },
         ])}
-        <div class="dashboard-weekly-chart"><div class="chart-caption">New tasks by day</div>${areaChart(dailyTaskCounts, dayLabels)}</div>
+        <div class="dashboard-weekly-chart"><div class="chart-caption">Tasks created · last 14 days</div>${areaChart(dailyTaskCounts, dayLabels)}</div>
+        <div class="dashboard-weekly-chart"><div class="chart-caption">Tasks completed · last 14 days</div>${areaChart(dailyDoneCounts, dayLabels)}</div>
+      </section>
+      <section class="surface-panel activity-panel">
+        <div class="panel-heading"><div><div class="eyebrow">WORK RHYTHM</div><h3>Activity by day and hour</h3><p class="panel-subtitle">A 14-day view of recorded workspace activity.</p></div></div>
+        ${activityHeatmap(metrics.activityByHour)}
+      </section>
+      <section class="surface-panel workload-panel">
+        <div class="panel-heading"><div><div class="eyebrow">TEAM OUTPUT</div><h3>Agent throughput</h3><p class="panel-subtitle">Completed and currently open tasks by agent.</p></div></div>
+        ${agentPerformanceList(metrics.byAgent)}
       </section>
       <section class="surface-panel team-panel">
         <div class="panel-heading"><div><div class="eyebrow">THE CREW</div><h3>Agent status</h3></div><button class="text-action" data-goto="team">All agents ${icon("arrow-up-right", 14)}</button></div>
@@ -2124,6 +2166,7 @@ function renderProject() {
   const project = state.project || {};
   const ready = !!project.codex_available;
   const workspaceValid = project.workspace_valid !== false;
+  const workspaceConfigured = project.workspace_configured === true;
   document.getElementById("content").innerHTML = `
     <div class="section">
       <div class="section-title">${icon("code", 18)} Let the team work in your project</div>
@@ -2132,14 +2175,15 @@ function renderProject() {
         <div class="input-wrap">
           <label for="projectWorkspace">Project folder path${project.workspace_is_default ? " (automatically detected)" : ""}</label>
           <input id="projectWorkspace" type="text" spellcheck="false" aria-invalid="${workspaceValid ? "false" : "true"}" placeholder="C:\\path\\to\\your\\project" value="${esc(project.workspace_path || "")}">
-          <div class="config-hint">${workspaceValid ? "Pin2Pin selects its project folder automatically. You can enter another absolute local path. Engineering uses a workspace-write sandbox and is instructed not to commit or deploy." : "The saved project folder is unavailable. Choose a valid local folder or restore the automatically detected folder."}</div>
+          <div class="config-hint">${workspaceValid ? (workspaceConfigured ? "This folder is confirmed. You can change it at any time. Engineering uses a workspace-write sandbox and is instructed not to commit or deploy." : "This folder was detected automatically. Confirm it here before Engineering can make project changes, or enter another absolute local path.") : "The saved project folder is unavailable. Choose a valid local folder or restore the automatically detected folder."}</div>
         </div>
+        <div class="workspace-confirmation ${workspaceConfigured ? "is-confirmed" : "needs-confirmation"}" role="status">${workspaceConfigured ? "Project folder confirmed for direct changes." : "Confirm the project folder before creating direct-change tasks."}</div>
         <div class="project-runtime ${ready ? "runtime-ready" : "runtime-missing"}">
           <span class="runtime-dot"></span>
           ${ready ? `Codex CLI found${project.codex_command ? `: ${esc(project.codex_command)}` : ""}` : "Codex CLI not found on the server PATH"}
         </div>
         <div class="project-actions">
-          <button class="btn btn-primary" id="btnSaveWorkspace">Save project folder</button>
+          <button class="btn btn-primary" id="btnSaveWorkspace">${workspaceConfigured ? "Save project folder" : "Confirm project folder"}</button>
           <button class="btn btn-outline" id="btnClearWorkspace" ${project.workspace_is_default ? "disabled" : ""}>Use automatic folder</button>
           <button class="btn btn-outline" data-goto="tasks">Open task board</button>
         </div>
@@ -2305,6 +2349,8 @@ async function saveProjectWorkspace(clear) {
 }
 
 function renderTasksBoard() {
+  const metrics = dashboardMetrics(state.stats, state.tasks);
+  const statusCounts = metrics.statusCounts;
   const cols = [
     { key: "backlog", title: "Backlog" },
     { key: "assigned", title: "To Do" },
@@ -2335,10 +2381,16 @@ function renderTasksBoard() {
         <div><div class="eyebrow">EXECUTION CENTER</div><h2>Work, clearly moving forward.</h2><p>Assign an outcome, see who owns it, and review the actual result.</p></div>
         <button class="btn btn-accent" id="btnOpenBoardCreate">${icon("plus", 18)} New task</button>
       </div>
+      <div class="board-overview" aria-label="Task board summary">
+        <article><span>Queue</span><b>${statusCounts.backlog + statusCounts.assigned}</b><small>Backlog and to do</small></article>
+        <article><span>In progress</span><b>${statusCounts.in_progress + statusCounts.waiting_engineering}</b><small>Engineering work included</small></article>
+        <article><span>Completed</span><b>${statusCounts.done}</b><small>${metrics.completionPercent}% of all tasks</small></article>
+        <article><span>Needs attention</span><b>${statusCounts.review + statusCounts.blocked}</b><small>Review or blocked</small></article>
+      </div>
       <div class="board-toolbar">
         <label class="board-search"><span>${icon("search", 18)}</span><input id="taskSearch" type="search" placeholder="Search tasks, owners, or results…" aria-label="Search tasks"></label>
         <select id="taskStatusFilter" aria-label="Filter tasks by status"><option value="">All statuses</option>${cols.map((col) => `<option value="${col.key}">${col.title}</option>`).join("")}</select>
-        <span class="board-task-total">${state.tasks.length} tasks</span>
+        <span class="board-task-total">${metrics.total} tasks</span>
         <button class="btn btn-outline btn-sm" id="toggleArchivedTasks">${state.showArchivedTasks ? "Hide archived" : "Show archived"}</button>
       </div>
       <details class="create-task-panel">
