@@ -51,5 +51,8 @@ jobs:
       - name: Check frontend JavaScript
         run: node --check frontend/static/js/app.js
 
+      - name: Run frontend unit tests
+        run: node --test tests/frontend
+
       - name: Run test suite
         run: python -m unittest discover -s tests -p "test_*.py"
